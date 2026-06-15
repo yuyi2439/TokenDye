@@ -1,0 +1,9 @@
+# python==3.13
+# torch --index-url https://download.pytorch.org/whl/cu130
+
+transformers
+accelerate
+bitsandbytes
+
+##### Qwen2.5-7B-Instruct 模型依赖
+# flash-attn --no-build-isolation
