@@ -1,16 +1,18 @@
-from torch import nn
 import torch
+from torch import nn
+from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
     get_cosine_schedule_with_warmup,
 )
-from torch.utils.data import DataLoader
 
-from tokendye import Dye, DyeDataset
+import tokendye
 
 MODEL_PATH = "./Qwen2.5-7B-Instruct"
+DATA_PATH = "./dataset/v0.1a.jsonl5"
+DYE_TYPES = {"system", "user", "tool_callback", "file_text"}
 
 quantization_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -24,49 +26,14 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 if tokenizer.pad_token_id is None:
     tokenizer.pad_token_id = tokenizer.eos_token_id
 
-print("加载模型...")
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_PATH,
-    quantization_config=quantization_config,
-    attn_implementation="flash_attention_2",
+print("加载 数据集...")
+full_dataset = tokendye.dataset.from_jsonl5(DATA_PATH, tokenizer, dye_types=DYE_TYPES)
+train_size = int(0.8 * len(full_dataset))
+val_size = len(full_dataset) - train_size
+train_dataset, val_dataset = torch.utils.data.random_split(
+    full_dataset,
+    [train_size, val_size],
 )
-model = model.to("cuda")  # type: ignore
-model.requires_grad_(False)
-
-###############################################################################
-
-dye_types = ["system", "user", "tool_callback", "file_text"]
-
-rank = 8
-d_model = model.config.hidden_size
-dtype = model.dtype
-
-dye_modules = nn.ModuleDict()
-for dye_label in dye_types:
-    module = Dye(d_model, rank, dtype=dtype).to(model.device)
-    module.requires_grad_(True)
-    dye_modules[dye_label] = module
-
-model.model.embed_tokens._dye_mask = None
-
-
-def dye_hook(module, input, output):
-    dye_mask = getattr(module, "_dye_mask", None)
-    if dye_mask is None:
-        return output
-    batch, seq, d = output.shape
-    flat_out = output.view(-1, d)
-    flat_mask = dye_mask.view(-1)
-    for dye_idx, dye_label in enumerate(dye_types):
-        pos = (flat_mask == dye_idx).nonzero(as_tuple=True)[0]
-        if pos.numel():
-            flat_out[pos] = dye_modules[dye_label](flat_out[pos])
-    return flat_out.view(batch, seq, d)
-
-
-model.model.embed_tokens.register_forward_hook(dye_hook)
-
-optimizer = torch.optim.AdamW(dye_modules.parameters(), lr=2e-4)
 
 
 def collate_fn(batch: list[dict[str, list[int]]]) -> dict[str, torch.Tensor]:
@@ -74,10 +41,14 @@ def collate_fn(batch: list[dict[str, list[int]]]) -> dict[str, torch.Tensor]:
     dye_mask_list = [torch.tensor(s["dye_mask"], dtype=torch.long) for s in batch]
 
     input_ids = torch.nn.utils.rnn.pad_sequence(
-        input_ids_list, batch_first=True, padding_value=tokenizer.pad_token_id
+        input_ids_list,
+        batch_first=True,
+        padding_value=tokenizer.pad_token_id,
     )
     dye_mask = torch.nn.utils.rnn.pad_sequence(
-        dye_mask_list, batch_first=True, padding_value=-1
+        dye_mask_list,
+        batch_first=True,
+        padding_value=-1,
     )
     attention_mask = (input_ids != tokenizer.pad_token_id).long()
 
@@ -91,21 +62,6 @@ def collate_fn(batch: list[dict[str, list[int]]]) -> dict[str, torch.Tensor]:
         "labels": labels,
     }
 
-
-raw_data = [
-    [
-        {"dye": "system", "text": "You are helpful."},
-        {"dye": "user", "text": "What is AI?"},
-    ],
-    [{"dye": "user", "text": "Hello"}, {"dye": "tool_callback", "text": "Result: 42"}],
-]
-
-full_dataset = DyeDataset(raw_data, tokenizer, dye_types)
-train_size = int(0.8 * len(full_dataset))
-val_size = len(full_dataset) - train_size
-train_dataset, val_dataset = torch.utils.data.random_split(
-    full_dataset, [train_size, val_size]
-)
 
 train_dataloader = DataLoader(
     train_dataset,
@@ -121,6 +77,47 @@ val_dataloader = DataLoader(
     collate_fn=collate_fn,
     pin_memory=True,
 )
+
+print("加载模型...")
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_PATH,
+    quantization_config=quantization_config,
+    attn_implementation="flash_attention_2",
+)
+model = model.to("cuda")  # type: ignore
+model.requires_grad_(False)
+
+
+d_model = model.config.hidden_size
+dtype = model.dtype
+
+dye_modules = nn.ModuleDict()
+for dye_label in DYE_TYPES:
+    module = tokendye.Dye(d_model, 8, dtype=dtype).to(model.device)
+    module.requires_grad_(True)
+    dye_modules[dye_label] = module
+
+model.model.embed_tokens._dye_mask = None
+
+
+def dye_hook(module, input, output):
+    dye_mask = getattr(module, "_dye_mask", None)
+    if dye_mask is None:
+        return output
+    batch, seq, d = output.shape
+    flat_out = output.view(-1, d)
+    flat_mask = dye_mask.view(-1)
+    for dye_idx, dye_label in enumerate(DYE_TYPES):
+        pos = (flat_mask == dye_idx).nonzero(as_tuple=True)[0]
+        if pos.numel():
+            flat_out[pos] = dye_modules[dye_label](flat_out[pos])
+    return flat_out.view(batch, seq, d)
+
+
+model.model.embed_tokens.register_forward_hook(dye_hook)
+
+optimizer = torch.optim.AdamW(dye_modules.parameters(), lr=2e-4)
+
 
 num_epochs = 10
 total_steps = num_epochs * len(train_dataloader)
@@ -177,5 +174,5 @@ for epoch in range(num_epochs):
 
     avg_val_loss = val_total_loss / len(val_dataloader)
     print(
-        f"Epoch {epoch + 1}/{num_epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.2e}"
+        f"Epoch {epoch + 1}/{num_epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.2e}",
     )

@@ -1,42 +1,41 @@
 from torch.utils.data import Dataset
 
+type DyeDataItem = dict[str, list[int]]
+
 
 class DyeDataset(Dataset):
     def __init__(
         self,
-        data: list[list[dict[str, str]]],
+        data_list: list[dict],
         tokenizer,
-        dye_types: list[str],
-        max_length: int = 2048,
+        dye_types: set[str],
     ):
         self.tokenizer = tokenizer
         self.dye_to_id = {dye: idx for idx, dye in enumerate(dye_types)}
-        self.samples = []
+        self.dataset: list[DyeDataItem] = []
 
-        for segments in data:
+        for data in data_list:
             input_ids = []
             dye_mask = []
-            for seg in segments:
-                dye = seg["dye"]
-                text = seg["text"]
+            for segment in data["segments"]:
+                dye = segment["dye"]
+                text = segment["text"]
                 tokens = tokenizer.encode(text, add_special_tokens=False)
                 dye_id = self.dye_to_id.get(dye, -1)
                 input_ids.extend(tokens)
                 dye_mask.extend([dye_id] * len(tokens))
+            target_ids = tokenizer.encode(data["target"], add_special_tokens=False)
 
-            if len(input_ids) > max_length:
-                input_ids = input_ids[:max_length]
-                dye_mask = dye_mask[:max_length]
-
-            self.samples.append(
+            self.dataset.append(
                 {
                     "input_ids": input_ids,
                     "dye_mask": dye_mask,
-                }
+                    "target_ids": target_ids,
+                },
             )
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return len(self.dataset)
 
-    def __getitem__(self, idx: int) -> dict[str, list[int]]:
-        return self.samples[idx]
+    def __getitem__(self, idx: int) -> DyeDataItem:
+        return self.dataset[idx]
