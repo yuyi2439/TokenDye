@@ -1,6 +1,7 @@
 import json
-import jsonl5
 from pathlib import Path
+
+import jsonl5
 
 from . import DyeDataset
 
