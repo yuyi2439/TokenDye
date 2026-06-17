@@ -3,6 +3,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 from torch import nn
@@ -16,7 +17,11 @@ from transformers import (
 
 import tokendye
 
-RESUME_TRAINING = False
+if TYPE_CHECKING:
+    from transformers.models import qwen2
+
+
+RESUME_TRAINING = True
 TOTAL_EPOCHS_PLANNED = 30
 
 LOG_DIR = Path("./.logs")
@@ -28,6 +33,7 @@ def setup_logging() -> logging.Logger:
     log_path = LOG_DIR / f"gen_log_{RUN_TS}.log"
 
     logger = logging.getLogger("run")
+    logger.setLevel(logging.INFO)
 
     fmt = logging.Formatter(
         "%(asctime)s | %(levelname)s | %(message)s",
@@ -41,7 +47,6 @@ def setup_logging() -> logging.Logger:
 
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setFormatter(fmt)
-    stream_handler.setLevel(logging.INFO)
     logger.addHandler(stream_handler)
 
     logger.info(f"日志文件: {log_path.resolve()}")
@@ -135,12 +140,11 @@ quantization_config = BitsAndBytesConfig(
 
 def main():
     logger.info("加载 tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+    tokenizer: qwen2.Qwen2Tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     logger.info("加载 dataloader...")
-
     train_dataloader, val_dataloader = init_dataloaders(tokenizer)
 
     logger.info("加载模型...")
@@ -153,11 +157,10 @@ def main():
     model.requires_grad_(False)
 
     d_model = model.config.hidden_size
-    dtype = model.dtype
 
     dye_modules = nn.ModuleDict()
     for dye_label in DYE_TYPES:
-        module = tokendye.Dye(d_model, 8, dtype=dtype).to(model.device)
+        module = tokendye.Dye(d_model, 8, dtype=model.dtype).to(model.device)
         module.requires_grad_(True)
         dye_modules[dye_label] = module
 
