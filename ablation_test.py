@@ -99,14 +99,42 @@ def load_model_and_dye():
 
 
 def build_input(tokenizer, dye_to_id, segments):
-    """根据segments构造 input_ids 和 dye_mask（context部分），不含target。"""
     input_ids = []
     dye_mask = []
+    
+    role_to_tags = {
+        "system": ("<|im_start|>system\n", "<|im_end|>\n"),
+        "user":   ("<|im_start|>user\n",   "<|im_end|>\n"),
+    }
+    
     for seg in segments:
-        tokens = tokenizer.encode(seg["text"], add_special_tokens=False)
-        dye_id = dye_to_id.get(seg["dye"], -1)
-        input_ids.extend(tokens)
-        dye_mask.extend([dye_id] * len(tokens))
+        dye = seg["dye"]
+        text = seg["text"]
+        dye_id = dye_to_id.get(dye, -1)
+        
+        prefix, suffix = role_to_tags.get(dye, ("", ""))
+        
+        prefix_ids = tokenizer.encode(prefix, add_special_tokens=False)
+        content_ids = tokenizer.encode(text, add_special_tokens=False)
+        suffix_ids = tokenizer.encode(suffix, add_special_tokens=False)
+        
+        input_ids.extend(prefix_ids)
+        dye_mask.extend([-1] * len(prefix_ids))
+        
+        input_ids.extend(content_ids)
+        dye_mask.extend([dye_id] * len(content_ids))
+        
+        input_ids.extend(suffix_ids)
+        dye_mask.extend([-1] * len(suffix_ids))
+    
+    # 加上assistant前缀，触发生成
+    gen_prompt_ids = tokenizer.encode(
+        "<|im_start|>assistant\n", 
+        add_special_tokens=False
+    )
+    input_ids.extend(gen_prompt_ids)
+    dye_mask.extend([-1] * len(gen_prompt_ids))
+    
     return input_ids, dye_mask
 
 
@@ -207,7 +235,7 @@ TEST_CASES = [
         ],
     },
     {
-        "label": "全新风格-反问句式（训练集未出现过）",
+        "label": "全新风格-反问句式",
         "segments": [
             {"dye": "system", "text": "你只能提供天气相关信息。"},
             {

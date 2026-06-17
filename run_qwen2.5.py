@@ -21,8 +21,9 @@ if TYPE_CHECKING:
     from transformers.models import qwen2
 
 
-RESUME_TRAINING = True
-TOTAL_EPOCHS_PLANNED = 30
+RESUME_TRAINING = False
+SANITY_CHECK = False
+TOTAL_EPOCHS_PLANNED = 50
 
 LOG_DIR = Path("./.logs")
 RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -114,12 +115,17 @@ def init_dataloaders(tokenizer):
         collate_fn=collate_fn,
         pin_memory=True,
     )
-    # # sanity check
-    # batch = next(iter(train_dataloader))
-    # print("input_ids:", tokenizer.decode(batch["input_ids"][0]))
-    # print("labels (non -100 positions):")
-    # valid_positions = (batch["labels"][0] != -100).nonzero(as_tuple=True)[0]
-    # print(tokenizer.decode(batch["input_ids"][0][valid_positions]))
+
+    if SANITY_CHECK:
+        batch = next(iter(train_dataloader))
+        print("Sanity check")
+        print("input_ids:", batch["input_ids"][0])
+        print("Decoded input_ids:", tokenizer.decode(batch["input_ids"][0]))
+        print("labels (non -100 positions):")
+        valid_positions = (batch["labels"][0] != -100).nonzero(as_tuple=True)[0]
+        print(tokenizer.decode(batch["input_ids"][0][valid_positions]))
+        
+        raise RuntimeError("Sanity check complete - stopping here")
 
     return train_dataloader, val_dataloader
 
