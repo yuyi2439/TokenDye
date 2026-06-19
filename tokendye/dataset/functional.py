@@ -1,35 +1,28 @@
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import jsonl5
 
 from . import DyeDataset
 
+if TYPE_CHECKING:
+    from os import PathLike
 
-def from_jsonl(
-    data_path: Path | str, tokenizer, dye_types: set[str] | None = None,
-) -> DyeDataset:
+    from ..dye_label import DyeLabel
+
+
+def from_jsonl(data_path: "PathLike | str", tokenizer, labels: list["DyeLabel"]):
     with open(data_path) as f:
         # raw_data = []
         # for line in f:
         #     raw_data.append(json.loads(line))
         raw_data = [json.loads(line) for line in f]
 
-    dye_types = dye_types or set(
-        item["dye"] for sample in raw_data for item in sample["segments"]
-    )
-
-    return DyeDataset(raw_data, tokenizer, dye_types)
+    return DyeDataset(raw_data, tokenizer, labels)
 
 
-def from_jsonl5(
-    data_path: Path | str, tokenizer, dye_types: set[str] | None = None,
-) -> DyeDataset:
+def from_jsonl5(data_path: "PathLike | str", tokenizer, labels: list["DyeLabel"]):
     with open(data_path) as f:
         raw_data = jsonl5.load(f)
 
-    dye_types = dye_types or set(
-        item["dye"] for sample in raw_data for item in sample["segments"]
-    )
-
-    return DyeDataset(raw_data, tokenizer, dye_types)
+    return DyeDataset(raw_data, tokenizer, labels)

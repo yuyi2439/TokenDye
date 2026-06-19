@@ -1,6 +1,7 @@
-from tokendye.dataset import DyeDataset
-from tokendye.dye_layer import Dye
-
 from . import dataset
+from .config import DyeConfig
+from .dataset import DyeDataset
+from .dye_label import DyeLabel, DyeLabelManager
+from .dye_layer import DyeLayer
 
-__all__ = ["Dye", "DyeDataset", "dataset"]
+__all__ = ["dataset", "DyeLayer", "DyeDataset", "DyeLabel", "DyeLabelManager", "DyeConfig"]

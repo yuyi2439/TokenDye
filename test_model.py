@@ -25,7 +25,9 @@ messages = [{"role": "user", "content": prompt}]
 
 # 应用聊天模板
 text = tokenizer.apply_chat_template(
-    messages, tokenize=False, add_generation_prompt=True,
+    messages,
+    tokenize=False,
+    add_generation_prompt=True,
 )
 
 # 编码输入
@@ -50,7 +52,8 @@ outputs = model.generate(  # pyright: ignore[reportAttributeAccessIssue]
 
 # 解码并打印
 response = tokenizer.decode(
-    outputs[0][inputs.input_ids.shape[1] :], skip_special_tokens=True,
+    outputs[0][inputs.input_ids.shape[1] :],
+    skip_special_tokens=True,
 )
 print("\n模型回答：")
 print(response)

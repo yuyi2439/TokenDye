@@ -5,6 +5,8 @@ transformers
 accelerate
 bitsandbytes
 jsonl5>=0.1.1
+pydantic
+matplotlib
 
 ##### Qwen2.5-7B-Instruct 模型依赖
 # flash-attn --no-build-isolation

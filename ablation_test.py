@@ -25,7 +25,6 @@ import tokendye
 # ---- 配置：需要跟训练时保持一致 ----
 MODEL_PATH = "./Qwen2.5-7B-Instruct"
 DYE_WEIGHTS_PATH = "./.checkpoints/dye_modules_best.pt"
-DYE_TYPES = {"system", "user", "tool_callback", "file_text"}
 
 quantization_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -56,15 +55,16 @@ def load_model_and_dye():
 
     print(f"加载染色权重: {DYE_WEIGHTS_PATH}")
     ckpt = torch.load(DYE_WEIGHTS_PATH, map_location=model.device)
-    dye_types_in_ckpt = ckpt["dye_types"]
+    dye_state_dicts = ckpt["dye_state_dicts"]
+    dye_types_in_ckpt = dye_state_dicts.keys()
     print(
         f"  -> checkpoint里的dye_types: {dye_types_in_ckpt}, epoch={ckpt['epoch']}, val_loss={ckpt['val_loss']:.4f}"
     )
 
     dye_modules = nn.ModuleDict()
     for dye_label in dye_types_in_ckpt:
-        module = tokendye.Dye(d_model, 8, dtype=dtype).to(model.device)
-        module.load_state_dict(ckpt["dye_state_dicts"][dye_label])
+        module = tokendye.DyeLayer(d_model, 8, dtype=dtype).to(model.device)
+        module.load_state_dict(dye_state_dicts[dye_label])
         module.eval()
         module.requires_grad_(False)
         dye_modules[dye_label] = module
@@ -101,40 +101,39 @@ def load_model_and_dye():
 def build_input(tokenizer, dye_to_id, segments):
     input_ids = []
     dye_mask = []
-    
-    role_to_tags = {
+
+    dye_to_affix = {
         "system": ("<|im_start|>system\n", "<|im_end|>\n"),
-        "user":   ("<|im_start|>user\n",   "<|im_end|>\n"),
+        "user": ("<|im_start|>user\n", "<|im_end|>\n"),
     }
-    
+
     for seg in segments:
         dye = seg["dye"]
         text = seg["text"]
         dye_id = dye_to_id.get(dye, -1)
-        
-        prefix, suffix = role_to_tags.get(dye, ("", ""))
-        
+
+        prefix, suffix = dye_to_affix.get(dye, ("", ""))
+
         prefix_ids = tokenizer.encode(prefix, add_special_tokens=False)
         content_ids = tokenizer.encode(text, add_special_tokens=False)
         suffix_ids = tokenizer.encode(suffix, add_special_tokens=False)
-        
+
         input_ids.extend(prefix_ids)
         dye_mask.extend([-1] * len(prefix_ids))
-        
+
         input_ids.extend(content_ids)
         dye_mask.extend([dye_id] * len(content_ids))
-        
+
         input_ids.extend(suffix_ids)
         dye_mask.extend([-1] * len(suffix_ids))
-    
+
     # 加上assistant前缀，触发生成
     gen_prompt_ids = tokenizer.encode(
-        "<|im_start|>assistant\n", 
-        add_special_tokens=False
+        "<|im_start|>assistant\n", add_special_tokens=False
     )
     input_ids.extend(gen_prompt_ids)
     dye_mask.extend([-1] * len(gen_prompt_ids))
-    
+
     return input_ids, dye_mask
 
 
@@ -255,7 +254,7 @@ TEST_CASES = [
 
 
 def main():
-    model, tokenizer, dye_modules, dye_types_in_ckpt = load_model_and_dye()
+    model, tokenizer, _, dye_types_in_ckpt = load_model_and_dye()
     dye_to_id = {label: idx for idx, label in enumerate(dye_types_in_ckpt)}
     print(f"\ndye_to_id 映射: {dye_to_id}\n")
 

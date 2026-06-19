@@ -16,25 +16,28 @@ from transformers import (
 )
 
 import tokendye
+from tokendye import DyeConfig, DyeLayer
 
 if TYPE_CHECKING:
     from transformers.models import qwen2
 
 
-RESUME_TRAINING = False
-SANITY_CHECK = False
-TOTAL_EPOCHS_PLANNED = 50
+RESUME_TRAINING = bool(os.getenv("RESUME_TRAINING", False))
+SANITY_CHECK = bool(os.getenv("SANITY_CHECK", False))
+TOTAL_EPOCHS = int(os.getenv("TOTAL_EPOCHS", 50))
 
-LOG_DIR = Path("./.logs")
+# ====================================================
+
 RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
+OUTPUT_DIR = Path("./.outputs") / f"output_{RUN_TS}"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def setup_logging() -> logging.Logger:
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / f"gen_log_{RUN_TS}.log"
+    log_path = OUTPUT_DIR / "log_all.log"
 
-    logger = logging.getLogger("run")
-    logger.setLevel(logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
 
     fmt = logging.Formatter(
         "%(asctime)s | %(levelname)s | %(message)s",
@@ -48,16 +51,15 @@ def setup_logging() -> logging.Logger:
 
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setFormatter(fmt)
+    stream_handler.setLevel(logging.INFO)
     logger.addHandler(stream_handler)
 
     logger.info(f"日志文件: {log_path.resolve()}")
     return logger
 
 
-def init_dataloaders(tokenizer):
-    full_dataset = tokendye.dataset.from_jsonl5(
-        DATA_PATH, tokenizer, dye_types=DYE_TYPES
-    )
+def init_dataloader(tokenizer, dyeConfig: DyeConfig):
+    full_dataset = tokendye.dataset.from_jsonl5(DATA_PATH, tokenizer, dyeConfig.labels)
     train_size = int(0.8 * len(full_dataset))
     val_size = len(full_dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(
@@ -103,7 +105,7 @@ def init_dataloaders(tokenizer):
 
     train_dataloader = DataLoader(
         train_dataset,
-        batch_size=4,
+        batch_size=6,
         shuffle=True,
         collate_fn=collate_fn,
         pin_memory=True,
@@ -117,14 +119,15 @@ def init_dataloaders(tokenizer):
     )
 
     if SANITY_CHECK:
+        logger.info("Sanity check")
         batch = next(iter(train_dataloader))
-        print("Sanity check")
-        print("input_ids:", batch["input_ids"][0])
-        print("Decoded input_ids:", tokenizer.decode(batch["input_ids"][0]))
+        print("input_ids:\n", batch["input_ids"][0])
+        print("Decoded input_ids:\n", tokenizer.decode(batch["input_ids"][0]))
+        print("dye_mask:\n", batch["dye_mask"][0])
         print("labels (non -100 positions):")
         valid_positions = (batch["labels"][0] != -100).nonzero(as_tuple=True)[0]
         print(tokenizer.decode(batch["input_ids"][0][valid_positions]))
-        
+
         raise RuntimeError("Sanity check complete - stopping here")
 
     return train_dataloader, val_dataloader
@@ -134,26 +137,25 @@ logger = setup_logging()
 
 MODEL_PATH = "./Qwen2.5-7B-Instruct"
 DATA_PATH = "./dataset/v0.1a.jsonl5"
-DYE_TYPES = {"system", "user", "tool_callback", "file_text"}
-
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_compute_dtype=torch.bfloat16,
-)
+CONFIG_PATH = "./DyeConfig_Qwen2.5-7B-Instruct.json"
 
 
 def main():
-    logger.info("加载 tokenizer...")
+    dyeConfig = DyeConfig.load(CONFIG_PATH)
+
+    logger.info("Loading tokenizer...")
     tokenizer: qwen2.Qwen2Tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    logger.info("加载 dataloader...")
-    train_dataloader, val_dataloader = init_dataloaders(tokenizer)
+    logger.info("Loading dataloader...")
+    train_dataloader, val_dataloader = init_dataloader(tokenizer, dyeConfig)
 
-    logger.info("加载模型...")
+    logger.info("Loading model...")
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_PATH,
         quantization_config=quantization_config,
@@ -162,38 +164,51 @@ def main():
     model = model.to("cuda")  # type: ignore
     model.requires_grad_(False)
 
-    d_model = model.config.hidden_size
+    # DYE_TYPES = [
+    #     "system",
+    #     "user",
+    #     "tool_callback",
+    #     "file_text",
+    # ]
+    # dyeConfig = DyeConfig(
+    #     model_name="Qwen2.5-7B-Instruct",
+    #     labels=[DyeLabel(id=i, name=n) for i, n in enumerate(DYE_TYPES)],
+    #     rank=8,
+    #     d_model=model.config.hidden_size,
+    #     dtype=str(model.dtype).split(".")[-1],
+    # )
+    # dyeConfig.save()
 
+    logger.info("Loading DyeLayer...")
     dye_modules = nn.ModuleDict()
-    for dye_label in DYE_TYPES:
-        module = tokendye.Dye(d_model, 8, dtype=model.dtype).to(model.device)
+    for dye_label in dyeConfig.labels:
+        module = DyeLayer(dyeConfig).to(model.device)
         module.requires_grad_(True)
-        dye_modules[dye_label] = module
-
-    model.model.embed_tokens._dye_mask = None
+        dye_modules[dye_label.name] = module
 
     def dye_hook(module, input, output):
         dye_mask = getattr(module, "_dye_mask", None)
         if dye_mask is None:
             return output
-        batch, seq, d = output.shape
-        flat_out = output.reshape(-1, d)
+
+        batch, seq, d_model = output.shape
+        flat_out = output.reshape(-1, d_model)
         flat_mask = dye_mask.reshape(-1)
 
-        # 用 out-of-place 方式重建输出，避免破坏autograd图
         new_out = flat_out
-        for dye_idx, dye_label in enumerate(DYE_TYPES):
-            pos = (flat_mask == dye_idx).nonzero(as_tuple=True)[0]
+        for dye_label in dyeConfig.labels:
+            pos = (flat_mask == dye_label.id).nonzero(as_tuple=True)[0]
             if pos.numel():
-                updated = dye_modules[dye_label](flat_out[pos])
+                updated = dye_modules[dye_label.name](flat_out[pos])
                 new_out = new_out.index_copy(0, pos, updated)
-        return new_out.view(batch, seq, d)
+        return new_out.view(batch, seq, d_model)
 
+    model.model.embed_tokens._dye_mask = None
     model.model.embed_tokens.register_forward_hook(dye_hook)
 
     optimizer = torch.optim.AdamW(dye_modules.parameters(), lr=2e-4)
 
-    total_steps = TOTAL_EPOCHS_PLANNED * len(train_dataloader)
+    total_steps = TOTAL_EPOCHS * len(train_dataloader)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=max(1, int(0.1 * total_steps)),
@@ -201,14 +216,13 @@ def main():
     )
 
     # ---- checkpoint 保存配置 ----
-    CKPT_DIR = "./.checkpoints"
-    os.makedirs(CKPT_DIR, exist_ok=True)
-    DYE_WEIGHTS_PATH = os.path.join(CKPT_DIR, "dye_modules_best.pt")
-    TRAIN_STATE_PATH = os.path.join(CKPT_DIR, "train_state_best.pt")
+    DYE_WEIGHTS_PATH = os.path.join(OUTPUT_DIR, "dye_modules_best.pt")
+    TRAIN_STATE_PATH = os.path.join(OUTPUT_DIR, "train_state_best.pt")
 
     best_val_loss = float("inf")
     start_epoch = 0
     if RESUME_TRAINING:
+        raise Exception("Todo")
         logger.info("尝试加载上次训练状态...")
         state = torch.load(
             "./.checkpoints/train_state_best.pt", map_location=model.device
@@ -223,7 +237,7 @@ def main():
             f"已加载 checkpoint，恢复到 epoch {start_epoch}，上次 val_loss={state['best_val_loss']:.4f}"
         )
 
-    for epoch in range(start_epoch, TOTAL_EPOCHS_PLANNED):
+    for epoch in range(start_epoch, TOTAL_EPOCHS):
         model.train()
         total_loss = 0.0
         for batch in train_dataloader:
@@ -243,7 +257,7 @@ def main():
             loss.backward()
             torch.nn.utils.clip_grad_norm_(dye_modules.parameters(), max_norm=1.0)
 
-            # Visualize gradient norms for each dye module
+            # Log gradient norms for each dye module
             for label, mod in dye_modules.items():
                 grad_norm = sum(
                     p.grad.norm().item() for p in mod.parameters() if p.grad is not None
@@ -278,7 +292,7 @@ def main():
 
         avg_val_loss = val_total_loss / len(val_dataloader)
         logger.info(
-            f"Epoch {epoch + 1}/{TOTAL_EPOCHS_PLANNED} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.2e}",
+            f"Epoch {epoch + 1}/{TOTAL_EPOCHS} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.2e}",
         )
 
         # ---- 保存最优checkpoint（仅当val loss刷新最优时）----
@@ -291,7 +305,7 @@ def main():
                     "dye_state_dicts": {
                         label: mod.state_dict() for label, mod in dye_modules.items()
                     },
-                    "dye_types": list(DYE_TYPES),
+                    "dye_types": list(dye_label),
                     "epoch": epoch + 1,
                     "val_loss": avg_val_loss,
                 },
@@ -314,7 +328,7 @@ def main():
             )
 
             logger.info(
-                f"  ↳ 新的最优 checkpoint (val_loss={avg_val_loss:.4f})，已保存到 {CKPT_DIR}"
+                f"  ↳ 新的最优 checkpoint (val_loss={avg_val_loss:.4f})，已保存到 {OUTPUT_DIR}"
             )
 
 

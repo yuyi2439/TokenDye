@@ -1,0 +1,24 @@
+{
+  "model_name": "Qwen2.5-7B-Instruct",
+  "labels": [
+    {
+      "name": "system",
+      "id": 0
+    },
+    {
+      "name": "user",
+      "id": 1
+    },
+    {
+      "name": "tool_callback",
+      "id": 2
+    },
+    {
+      "name": "file_text",
+      "id": 3
+    }
+  ],
+  "rank": 8,
+  "d_model": 3584,
+  "dtype": "bfloat16"
+}
