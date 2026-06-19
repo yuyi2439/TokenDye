@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Optional
 
 from pydantic import BaseModel
 
-from .dye_label import DyeLabel
+from .label import DyeLabel
 
 if TYPE_CHECKING:
     from os import PathLike

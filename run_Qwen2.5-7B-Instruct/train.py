@@ -1,26 +1,15 @@
-import logging
 import os
-import sys
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-import torch
-from torch import nn
-from torch.utils.data import DataLoader
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    get_cosine_schedule_with_warmup,
-)
 
 import tokendye
+import tokendye.dataset
+import torch
 from tokendye import DyeConfig, DyeLayer
-
-if TYPE_CHECKING:
-    from transformers.models import qwen2
-
+from torch import nn
+from torch.utils.data import DataLoader
+from transformers import get_cosine_schedule_with_warmup
+from utils import load_model_and_tokenizer, setup_logging
 
 RESUME_TRAINING = bool(os.getenv("RESUME_TRAINING", False))
 SANITY_CHECK = bool(os.getenv("SANITY_CHECK", False))
@@ -31,31 +20,6 @@ TOTAL_EPOCHS = int(os.getenv("TOTAL_EPOCHS", 50))
 RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
 OUTPUT_DIR = Path("./.outputs") / f"output_{RUN_TS}"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def setup_logging() -> logging.Logger:
-    log_path = OUTPUT_DIR / "log_all.log"
-
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
-
-    fmt = logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
-    file_handler.setFormatter(fmt)
-    file_handler.setLevel(logging.DEBUG)
-    logger.addHandler(file_handler)
-
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(fmt)
-    stream_handler.setLevel(logging.INFO)
-    logger.addHandler(stream_handler)
-
-    logger.info(f"日志文件: {log_path.resolve()}")
-    return logger
 
 
 def init_dataloader(tokenizer, dyeConfig: DyeConfig):
@@ -133,36 +97,19 @@ def init_dataloader(tokenizer, dyeConfig: DyeConfig):
     return train_dataloader, val_dataloader
 
 
-logger = setup_logging()
+logger = setup_logging(OUTPUT_DIR, "train")
 
 MODEL_PATH = "./Qwen2.5-7B-Instruct"
 DATA_PATH = "./dataset/v0.1a.jsonl5"
-CONFIG_PATH = "./DyeConfig_Qwen2.5-7B-Instruct.json"
+CONFIG_PATH = "run_Qwen2.5-7B-Instruct/DyeConfig.json"
 
 
 def main():
     dyeConfig = DyeConfig.load(CONFIG_PATH)
-
-    logger.info("Loading tokenizer...")
-    tokenizer: qwen2.Qwen2Tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+    model, tokenizer = load_model_and_tokenizer(logger)
 
     logger.info("Loading dataloader...")
     train_dataloader, val_dataloader = init_dataloader(tokenizer, dyeConfig)
-
-    logger.info("Loading model...")
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_PATH,
-        quantization_config=quantization_config,
-        attn_implementation="flash_attention_2",
-    )
-    model = model.to("cuda")  # type: ignore
-    model.requires_grad_(False)
 
     # DYE_TYPES = [
     #     "system",
@@ -179,7 +126,7 @@ def main():
     # )
     # dyeConfig.save()
 
-    logger.info("Loading DyeLayer...")
+    logger.info("Setting up DyeLayer...")
     dye_modules = nn.ModuleDict()
     for dye_label in dyeConfig.labels:
         module = DyeLayer(dyeConfig).to(model.device)
@@ -225,7 +172,8 @@ def main():
         raise Exception("Todo")
         logger.info("尝试加载上次训练状态...")
         state = torch.load(
-            "./.checkpoints/train_state_best.pt", map_location=model.device
+            "./.checkpoints/train_state_best.pt",
+            map_location=model.device,
         )
         for label, mod in dye_modules.items():
             mod.load_state_dict(state["dye_state_dicts"][label])
@@ -234,7 +182,7 @@ def main():
         start_epoch = state["epoch"]
         best_val_loss = state["best_val_loss"]
         logger.info(
-            f"已加载 checkpoint，恢复到 epoch {start_epoch}，上次 val_loss={state['best_val_loss']:.4f}"
+            f"已加载 checkpoint，恢复到 epoch {start_epoch}，上次 val_loss={state['best_val_loss']:.4f}",
         )
 
     for epoch in range(start_epoch, TOTAL_EPOCHS):
@@ -328,7 +276,7 @@ def main():
             )
 
             logger.info(
-                f"  ↳ 新的最优 checkpoint (val_loss={avg_val_loss:.4f})，已保存到 {OUTPUT_DIR}"
+                f"  ↳ 新的最优 checkpoint (val_loss={avg_val_loss:.4f})，已保存到 {OUTPUT_DIR}",
             )
 
 

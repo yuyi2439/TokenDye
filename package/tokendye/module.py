@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from .config import DyeConfig
 
 
-class DyeLayer(nn.Module):
+class DyeModule(nn.Module):
     def __init__(
         self,
         config: "DyeConfig",

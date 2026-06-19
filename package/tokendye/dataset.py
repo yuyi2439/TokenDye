@@ -1,15 +1,29 @@
+import json
 from typing import TYPE_CHECKING
 
+import jsonl5
 from torch.utils.data import Dataset
 
 if TYPE_CHECKING:
-    from ..dye_label import DyeLabel
+    from os import PathLike
 
-def _build_sequence(
-    data: dict,
-    tokenizer,
-    labels: list['DyeLabel']
-):
+    from .label import DyeLabel
+
+
+def _build_sequence(data: dict, tokenizer, labels: list["DyeLabel"]):
+    """Build sequence for module
+    `data`: looks like:  (If no target, it maybe testing)
+    ```
+    {
+        "segments": [
+            {"dye": "system", "text": "xxx"},
+            {"dye": "user", "text": "xxx"},
+            ...
+        ],
+        "target": "xxx"
+    }
+    ```
+    """
     input_ids = []
     dye_mask = []
 
@@ -28,7 +42,6 @@ def _build_sequence(
         else:
             messages.append({"role": "user", "content": text})
 
-    # tokenize=True直接返回ids，不含generation prompt
     full_ids: list[int] = tokenizer.apply_chat_template(
         messages,
         tokenize=True,
@@ -37,8 +50,7 @@ def _build_sequence(
 
     # 2. 对每段content单独encode，在full_ids里定位边界，构建dye_mask
     dye_mask = [-1] * len(full_ids)
-
-    label_map = {label.name:label.id for label in labels}
+    label_map = {label.name: label.id for label in labels}
     for segment in data["segments"]:
         dye = segment["dye"]
         text = segment["text"]
@@ -52,14 +64,14 @@ def _build_sequence(
         if len(positions) > 1:
             raise ValueError(
                 f"ambiguous match ({len(positions)} hits), "
-                f"two segments have identical content: {text!r}"
+                f"two segments have identical content: {text!r}",
             )
 
         pos = positions[0]
         for i in range(len(content_ids)):
             dye_mask[pos + i] = dye_id
 
-    # 3. target部分：从apply_chat_template提取generation prompt
+    # 从apply_chat_template提取generation prompt
     context_len = len(full_ids)
 
     full_ids_with_gen: list[int] = tokenizer.apply_chat_template(
@@ -67,12 +79,18 @@ def _build_sequence(
         tokenize=True,
         add_generation_prompt=True,
     )["input_ids"]  # TODO: 留着attention_mask或许有用
+
     gen_prompt_ids = full_ids_with_gen[context_len:]  # 只取新增部分
+
+    # test时
+    if not data["target"]:
+        input_ids = full_ids_with_gen
+        dye_mask = dye_mask + [-1] * len(gen_prompt_ids)
+        return input_ids, dye_mask, []
 
     target_ids = tokenizer.encode(data["target"], add_special_tokens=False)
     eos = [tokenizer.eos_token_id]
-
-    input_ids = full_ids + gen_prompt_ids + target_ids + eos
+    input_ids = full_ids_with_gen + target_ids + eos
     dye_mask = dye_mask + [-1] * (len(gen_prompt_ids) + len(target_ids) + 1)
 
     target_mask = (
@@ -86,25 +104,31 @@ def _build_sequence(
 
 
 class DyeDataset(Dataset):
-    def __init__(
-        self,
-        raw_data: list[dict],
-        tokenizer,
-        labels: list['DyeLabel']
-    ):
+    def __init__(self, data_list: list[dict], tokenizer, labels: list["DyeLabel"]):
+        """
+        `data_list`: a list contains data like:  (If no target, it maybe testing)
+        ```
+        {
+            "segments": [
+                {"dye": "system", "text": "xxx"},
+                {"dye": "user", "text": "xxx"},
+                ...
+            ],
+            "target": "xxx"
+        }
+        ```
+        """
         self.dataset: list[dict] = []
 
-        for data in raw_data:
-            input_ids, dye_mask, target_mask = _build_sequence(
-                data, tokenizer, labels
-            )
+        for data in data_list:
+            input_ids, dye_mask, target_mask = _build_sequence(data, tokenizer, labels)
 
             self.dataset.append(
                 {
                     "input_ids": input_ids,
                     "dye_mask": dye_mask,
                     "target_mask": target_mask,
-                }
+                },
             )
 
     def __len__(self):
@@ -112,6 +136,26 @@ class DyeDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.dataset[idx]
+
+
+def from_jsonl(data_path: "PathLike | str", tokenizer, labels: list["DyeLabel"]):
+    with open(data_path) as f:
+        # raw_data = []
+        # for line in f:
+        #     raw_data.append(json.loads(line))
+        raw_data = [json.loads(line) for line in f]
+
+    return DyeDataset(raw_data, tokenizer, labels)
+
+
+def from_jsonl5(data_path: "PathLike | str", tokenizer, labels: list["DyeLabel"]):
+    with open(data_path) as f:
+        raw_data = jsonl5.load(f)
+
+    return DyeDataset(raw_data, tokenizer, labels)
+
+
+__all__ = ["DyeDataset", "from_jsonl", "from_jsonl5"]
 
 
 def _find_all_sublist(full, sub) -> list[int]:
