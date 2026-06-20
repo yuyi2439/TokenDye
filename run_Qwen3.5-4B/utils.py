@@ -17,12 +17,12 @@ if TYPE_CHECKING:
 
 
 
-MODEL_NAME = "Qwen2.5-7B-Instruct"
 DATA_PATH = "./dataset/v0.1a.jsonl5"
 
 
 BASE = Path(__file__).parent
 SANITY_CHECK = bool(os.getenv("SANITY_CHECK", False))
+
 
 def load_model_and_tokenizer(logger: "Logger"):
     model_path = BASE / MODEL_NAME
@@ -50,12 +50,7 @@ def load_model_and_tokenizer(logger: "Logger"):
 
 
 def init_dataloader(
-    logger,
-    tokenizer,
-    dyeConfig: "DyeConfig",
-    *,
-    bs_train: int,
-    bs_val: int,
+    logger, tokenizer, dyeConfig: "DyeConfig", *, bs_train: int, bs_val: int,
 ):
     full_dataset = tokendye.dataset.from_jsonl5(DATA_PATH, tokenizer, dyeConfig.labels)
     train_size = int(0.8 * len(full_dataset))
@@ -165,6 +160,7 @@ if __name__ == "__main__":
         "tool_callback",
         "file_text",
     ]
+
     logger = setup_logging(BASE, None)
     model, _ = load_model_and_tokenizer(logger)
     dyeConfig = DyeConfig(

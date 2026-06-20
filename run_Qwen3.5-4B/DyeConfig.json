@@ -1,0 +1,24 @@
+{
+  "model_name": "Qwen3.5-4B",
+  "d_model": 2560,
+  "labels": [
+    {
+      "name": "system",
+      "id": 0
+    },
+    {
+      "name": "user",
+      "id": 1
+    },
+    {
+      "name": "tool_callback",
+      "id": 2
+    },
+    {
+      "name": "file_text",
+      "id": 3
+    }
+  ],
+  "rank": 32,
+  "dtype": "bfloat16"
+}

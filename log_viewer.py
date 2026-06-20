@@ -1,13 +1,13 @@
-import os
 import re
+import sys
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-output = os.getenv("OUTPUT")
-assert output is not None
+BASE = Path(sys.argv[1])
 
 # 读取日志文件
-with open("./.outputs/" + output + "/log_all.log") as f:
+with open(BASE / "train.log") as f:
     lines = f.readlines()
 
 epochs = []
@@ -27,7 +27,8 @@ for line in lines:
 
     # 匹配 Epoch 信息行
     epoch_match = re.search(
-        r"Epoch (\d+)/\d+ \| Train Loss: ([\d.]+) \| Val Loss: ([\d.]+)", line
+        r"Epoch (\d+)/\d+ \| Train Loss: ([\d.]+) \| Val Loss: ([\d.]+)",
+        line,
     )
     if epoch_match:
         epoch = int(epoch_match.group(1))
@@ -55,17 +56,30 @@ fig, axes = plt.subplots(2, 1, figsize=(12, 8))
 axes[0].plot(epochs, train_losses, "b-", label="Train Loss", alpha=0.7)
 axes[0].plot(epochs, val_losses, "r-", label="Val Loss", alpha=0.7)
 # 标记最佳 epoch
-best_idx = val_losses.index(min(val_losses))
+best_val_loss = min(val_losses)
+best_epoch = val_losses.index(best_val_loss)
 axes[0].axvline(
-    x=epochs[best_idx],
+    x=epochs[best_epoch],
     color="gray",
     linestyle="--",
-    label=f"Best epoch ({epochs[best_idx]})",
+    label=f"Best epoch ({epochs[best_epoch]})",
 )
+axes[0].scatter(best_epoch, best_val_loss, c="red", s=60, zorder=5)
+axes[0].text(
+    best_epoch,
+    best_val_loss,
+    f"{best_val_loss:.4f}",
+    va="bottom",
+    ha="left",
+    fontsize=9,
+    color="red",
+)
+
 axes[0].set_xlabel("Epoch")
 axes[0].set_ylabel("Loss")
 axes[0].legend()
 axes[0].grid(True, alpha=0.3)
+axes[0].set_title("Loss")
 
 # ---- 子图2：Gradient Norm ----
 for stain_type, data in active_stains.items():
@@ -76,7 +90,11 @@ axes[1].set_xlabel("Epoch")
 axes[1].set_ylabel("Gradient Norm")
 axes[1].legend()
 axes[1].grid(True, alpha=0.3)
+axes[1].set_title("Gradient Norm")
 
+plt.suptitle(BASE.name)
 plt.tight_layout()
-# plt.savefig('training_curves_with_grad.png', dpi=150)
-plt.show()
+plt.savefig(BASE / "train_figure.png")
+# plt.show()
+
+print(f"Saved in {BASE}")

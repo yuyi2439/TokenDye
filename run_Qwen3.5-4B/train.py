@@ -8,11 +8,11 @@ from transformers import get_cosine_schedule_with_warmup
 from utils import BASE, init_dataloader, load_model_and_tokenizer, setup_logging
 
 RESUME_TRAINING = bool(os.getenv("RESUME_TRAINING", False))
-TOTAL_EPOCHS = 60
+TOTAL_EPOCHS = 35
 PATIENCE = 10
-bs_train = 6
-bs_val = 10
-lr = 2e-4
+bs_train = 4
+bs_val = 8
+lr = 1e-5
 
 # ====================================================
 
