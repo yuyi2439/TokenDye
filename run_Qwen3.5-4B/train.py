@@ -19,7 +19,7 @@ from tokendye import ModelDyeConfig
 from tokendye.module import setup_dye_modules
 
 RESUME_TRAINING = bool(os.getenv("RESUME_TRAINING", False))
-
+DATA_FILE = Path("./dataset/v0.2.jsonl5")
 
 # ====================================================
 
@@ -40,6 +40,7 @@ def run_trains(
     _seed = torch.initial_seed()
     logger.debug(f"Initial Seed: {_seed}")
 
+    logger.info(f"DataSet: {DATA_FILE}")
     logger.info("ModelDyeConfig: " + mdc.model_dump_json(indent=2))
 
     logger.debug("Loading model and tokenizer")
@@ -48,6 +49,7 @@ def run_trains(
 
     logger.debug("Loading dataloader...")
     dataloaders = init_dataloaders(
+        DATA_FILE,
         logger,
         tokenizer,
         mdc.labels,

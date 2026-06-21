@@ -16,11 +16,10 @@ if TYPE_CHECKING:
 
     from transformers import TokenizersBackend
 
-    from tokendye import ModelDyeConfig
+    from tokendye import DyeLabel
 
 
 MODEL_NAME = "Qwen3.5-4B"
-DATA_PATH = "./dataset/v0.1.jsonl5"
 
 
 BASE = Path(__file__).parent
@@ -68,13 +67,14 @@ def load_model_and_tokenizer():
 
 
 def init_dataloaders(
+    data_file: "Path",
     logger: "Logger",
     tokenizer,
-    labels: "list[DyeLabel]",
+    labels: list["DyeLabel"],
     bs_train: int,
     bs_val: int,
 ):
-    full_dataset = tokendye.dataset.from_jsonl5(DATA_PATH, tokenizer, labels)
+    full_dataset = tokendye.dataset.from_jsonl5(data_file, tokenizer, labels)
     train_size = int(0.8 * len(full_dataset))
     val_size = len(full_dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(
@@ -190,23 +190,23 @@ def setup_logger(workspace: "Path", name: str, handler=None) -> "Logger":
     return logger
 
 
-if __name__ == "__main__":
-    from tokendye import DyeLabel
+# if __name__ == "__main__":
+#     from tokendye import DyeLabel
 
-    DYE_TYPES = [
-        "system",
-        "user",
-        "tool_callback",
-        "file_text",
-    ]
-    model, _ = load_model_and_tokenizer()
-    mdc = ModelDyeConfig(
-        model_name=MODEL_NAME,
-        labels=[DyeLabel(id=i, name=n) for i, n in enumerate(DYE_TYPES)],
-        d_model=model.config.hidden_size,
-        dtype=str(model.dtype).split(".")[-1],
-    )
-    mdc.save()
+#     DYE_TYPES = [
+#         "system",
+#         "user",
+#         "tool_callback",
+#         "file_text",
+#     ]
+#     model, _ = load_model_and_tokenizer()
+#     mdc = ModelDyeConfig(
+#         model_name=MODEL_NAME,
+#         labels=[DyeLabel(id=i, name=n) for i, n in enumerate(DYE_TYPES)],
+#         d_model=model.config.hidden_size,
+#         dtype=str(model.dtype).split(".")[-1],
+#     )
+#     mdc.save()
 
 
 class MyLogHandler(logging.Handler):

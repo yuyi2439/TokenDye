@@ -17,16 +17,16 @@ with open(log_file) as f:
 epochs = []
 train_losses = []
 val_losses = []
-grad_data = {}  # {stain_type: [ (epoch, grad_norm), ... ]}
-current_grads = []  # 临时存储当前 epoch 的染色梯度
+grad_data: dict[str, list] = {}  # {dye_type: [ (epoch, grad_norm), ... ]}
+current_grads = []  # 临时存储当前 epoch 的所有梯度记录
 
 for line in lines:
-    # 匹配梯度行
-    grad_match = re.search(r"DEBUG \| (\w+): grad_norm = ([\d.]+)", line)
+    # 匹配梯度行 - 允许 dye 名称包含冒号
+    grad_match = re.search(r"DEBUG \| ([\w:]+): grad_norm = ([\d.]+)", line)
     if grad_match:
-        stain_type = grad_match.group(1)
+        dye_type = grad_match.group(1)
         grad_val = float(grad_match.group(2))
-        current_grads.append((stain_type, grad_val))
+        current_grads.append((dye_type, grad_val))
         continue
 
     # 匹配 Epoch 信息行
@@ -43,15 +43,20 @@ for line in lines:
         train_losses.append(train_loss)
         val_losses.append(val_loss)
 
-        # 把前面收集的梯度归到当前 epoch
-        for stain_type, val in current_grads:
-            if stain_type not in grad_data:
-                grad_data[stain_type] = []
-            grad_data[stain_type].append((epoch, val))
+        # 按 dye 分组求平均
+        epoch_grads = {}  # dye_type -> list of gradients
+        for dye_type, val in current_grads:
+            epoch_grads.setdefault(dye_type, []).append(val)
+
+        for dye_type, vals in epoch_grads.items():
+            avg_val = sum(vals) / len(vals)
+            if dye_type not in grad_data:
+                grad_data[dye_type] = []
+            grad_data[dye_type].append((epoch, avg_val))
         current_grads = []  # 清空，准备下一个 epoch
 
 # 过滤掉始终为 0 的染色（如 tool_callback, file_text），避免画图冗余
-active_stains = {k: v for k, v in grad_data.items() if any(val != 0.0 for _, val in v)}
+active_dyes = {k: v for k, v in grad_data.items() if any(val != 0.0 for _, val in v)}
 
 # 绘图
 fig, axes = plt.subplots(2, 1, figsize=(12, 8))
@@ -86,9 +91,9 @@ axes[0].grid(True, alpha=0.3)
 axes[0].set_title("Loss")
 
 # ---- 子图2：Gradient Norm ----
-for stain_type, data in active_stains.items():
+for dye_type, data in active_dyes.items():
     ep, vals = zip(*data)
-    axes[1].plot(ep, vals, marker=".", label=stain_type)
+    axes[1].plot(ep, vals, marker=".", label=dye_type)
 
 axes[1].set_xlabel("Epoch")
 axes[1].set_ylabel("Gradient Norm")
@@ -100,7 +105,7 @@ img_path = BASE / "train_figure.png"
 
 plt.suptitle(BASE.name)
 plt.tight_layout()
-plt.savefig(img_path, dpi=200)
+plt.savefig(img_path, dpi=250)
 # plt.show()
 
 print(f"Saved in {img_path}")
