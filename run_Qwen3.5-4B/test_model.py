@@ -1,8 +1,8 @@
-from utils import BASE, load_model_and_tokenizer, setup_logging
+from utils import BASE, load_model_and_tokenizer, setup_logger
 
-logger = setup_logging(BASE, "test_model")
+logger = setup_logger(BASE, "test_model")
 
-model, tokenizer = load_model_and_tokenizer(logger)
+model, tokenizer = load_model_and_tokenizer()
 
 # 测试对话
 prompt = "你好，请介绍一下自己"

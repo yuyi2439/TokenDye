@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from .label import DyeLabel
 
 
-def _build_sequence(data: dict, tokenizer, labels: list["DyeLabel"]):
+def _build_sequence(data: dict, tokenizer, labels: list["DyeLabel"], **template_kwargs):
     """Build sequence for module
     `data`: looks like:  (If no target, it maybe testing)
     ```
@@ -51,6 +51,7 @@ def _build_sequence(data: dict, tokenizer, labels: list["DyeLabel"]):
     # 2. 对每段content单独encode，在full_ids里定位边界，构建dye_mask
     dye_mask = [-1] * len(full_ids)
     label_map = {label.name: label.id for label in labels}
+    label_map[""] = -1
     for segment in data["segments"]:
         dye = segment["dye"]
         text = segment["text"]
@@ -75,15 +76,13 @@ def _build_sequence(data: dict, tokenizer, labels: list["DyeLabel"]):
     context_len = len(full_ids)
 
     full_ids_with_gen: list[int] = tokenizer.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,
+        messages, tokenize=True, add_generation_prompt=True, **template_kwargs
     )["input_ids"]  # TODO: 留着attention_mask或许有用
 
     gen_prompt_ids = full_ids_with_gen[context_len:]  # 只取新增部分
 
     # test时
-    if not data["target"]:
+    if not data.get("target"):
         input_ids = full_ids_with_gen
         dye_mask = dye_mask + [-1] * len(gen_prompt_ids)
         return input_ids, dye_mask, []
@@ -121,7 +120,9 @@ class DyeDataset(Dataset):
         self.dataset: list[dict] = []
 
         for data in data_list:
-            input_ids, dye_mask, target_mask = _build_sequence(data, tokenizer, labels)
+            input_ids, dye_mask, target_mask = _build_sequence(
+                data, tokenizer, labels, enable_thinking=False
+            )
 
             self.dataset.append(
                 {

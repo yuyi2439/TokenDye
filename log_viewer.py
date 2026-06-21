@@ -5,9 +5,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 BASE = Path(sys.argv[1])
+log_list = list(BASE.glob("train-*.log"))
+if len(log_list) != 1:
+    raise FileExistsError(f"The number of `train-*.log` ({len(log_list)}) is not 1")
+log_file = log_list[0]
 
 # 读取日志文件
-with open(BASE / "train.log") as f:
+with open(log_file) as f:
     lines = f.readlines()
 
 epochs = []
@@ -57,12 +61,12 @@ axes[0].plot(epochs, train_losses, "b-", label="Train Loss", alpha=0.7)
 axes[0].plot(epochs, val_losses, "r-", label="Val Loss", alpha=0.7)
 # 标记最佳 epoch
 best_val_loss = min(val_losses)
-best_epoch = val_losses.index(best_val_loss)
+best_epoch = epochs[val_losses.index(best_val_loss)]
 axes[0].axvline(
-    x=epochs[best_epoch],
+    x=best_epoch,
     color="gray",
     linestyle="--",
-    label=f"Best epoch ({epochs[best_epoch]})",
+    label=f"Best epoch ({best_epoch})",
 )
 axes[0].scatter(best_epoch, best_val_loss, c="red", s=60, zorder=5)
 axes[0].text(
@@ -94,7 +98,7 @@ axes[1].set_title("Gradient Norm")
 
 plt.suptitle(BASE.name)
 plt.tight_layout()
-plt.savefig(BASE / "train_figure.png")
+plt.savefig(BASE / "train_figure.png", dpi=200)
 # plt.show()
 
 print(f"Saved in {BASE}")

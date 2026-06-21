@@ -2,24 +2,26 @@ import os
 from datetime import datetime
 
 import torch
-from tokendye import DyeConfig, DyeLayer
 from torch import nn
 from transformers import get_cosine_schedule_with_warmup
 from utils import BASE, init_dataloader, load_model_and_tokenizer, setup_logging
 
+from tokendye import DyeModule, ModelDyeConfig
+
 RESUME_TRAINING = bool(os.getenv("RESUME_TRAINING", False))
-TOTAL_EPOCHS = 60
+TOTAL_EPOCHS = 50
 PATIENCE = 10
 bs_train = 6
 bs_val = 10
-lr = 2e-4
+lr = 3e-4
 
 # ====================================================
 
 RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
-dyeConfig = DyeConfig.load(BASE / "DyeConfig.json")
+dyeConfig = ModelDyeConfig.load(BASE / "DyeConfig.json")
+RANK = 8  # LoRA rank for dye modules
 
-OUTPUT_DIR = BASE / ".outputs" / f"{RUN_TS}-rank_{dyeConfig.rank}"
+OUTPUT_DIR = BASE / ".outputs" / RUN_TS
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 logger = setup_logging(OUTPUT_DIR, "train")
@@ -33,13 +35,17 @@ def main():
 
     logger.info("Loading dataloader...")
     train_dataloader, val_dataloader = init_dataloader(
-        logger, tokenizer, dyeConfig, bs_train=bs_train, bs_val=bs_val,
+        logger,
+        tokenizer,
+        dyeConfig,
+        bs_train=bs_train,
+        bs_val=bs_val,
     )
 
     logger.info("Setting up DyeLayer...")
     dye_modules = nn.ModuleDict()
     for dye_label in dyeConfig.labels:
-        module = DyeLayer(dyeConfig).to(model.device)
+        module = DyeModule(dyeConfig, RANK).to(model.device)
         module.requires_grad_(True)
         dye_modules[dye_label.name] = module
 
@@ -104,7 +110,7 @@ def main():
             logger.info("Patience exhausted")
             return
         if epoch + PATIENCE == TOTAL_EPOCHS:
-            logger.error("Should improve TOTAL_EPOCHS")
+            logger.error("Should improve TOTAL_EPOCHS or lr")
 
         model.train()
         total_loss = 0.0

@@ -18,7 +18,6 @@
       "id": 3
     }
   ],
-  "rank": 8,
   "d_model": 3584,
   "dtype": "bfloat16"
 }

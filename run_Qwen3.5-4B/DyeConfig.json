@@ -3,22 +3,17 @@
   "d_model": 2560,
   "labels": [
     {
-      "name": "system",
+      "name": "assistant",
       "id": 0
     },
     {
-      "name": "user",
+      "name": "system",
       "id": 1
     },
     {
-      "name": "tool_callback",
+      "name": "user",
       "id": 2
-    },
-    {
-      "name": "file_text",
-      "id": 3
     }
   ],
-  "rank": 32,
   "dtype": "bfloat16"
 }

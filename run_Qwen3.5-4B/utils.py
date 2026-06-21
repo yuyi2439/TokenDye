@@ -4,34 +4,52 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import tokendye.dataset
 import torch
+from pydantic import BaseModel
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+import tokendye.dataset
 
 if TYPE_CHECKING:
     from logging import Logger
 
-    from tokendye import DyeConfig
     from transformers import TokenizersBackend
 
+    from tokendye import ModelDyeConfig
 
 
+MODEL_NAME = "Qwen3.5-4B"
 DATA_PATH = "./dataset/v0.1a.jsonl5"
 
 
 BASE = Path(__file__).parent
-SANITY_CHECK = bool(os.getenv("SANITY_CHECK", False))
+SANITY_CHECK = bool(os.getenv("SANITY_CHECK", 0))
 
 
-def load_model_and_tokenizer(logger: "Logger"):
+class TrainConfig(BaseModel):
+    rank: int
+    lr: float
+    total_epochs: int = 35
+    patience: int = 10
+
+    def save(self, wordspace: "Path", indent: int = 2):
+        p = wordspace / "train_config.json"
+        p.write_text(self.model_dump_json(indent=indent))
+
+    @classmethod
+    def load(cls, wordspace: "Path"):
+        p = wordspace / "train_config.json"
+        return cls.model_validate_json(p.read_text())
+
+
+def load_model_and_tokenizer():
     model_path = BASE / MODEL_NAME
-    logger.info("Loading tokenizer...")
+
     tokenizer: TokenizersBackend = AutoTokenizer.from_pretrained(model_path)
     # if tokenizer.pad_token_id is None:
     #     tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    logger.info("Loading model...")
     quantization_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -49,10 +67,14 @@ def load_model_and_tokenizer(logger: "Logger"):
     return model, tokenizer
 
 
-def init_dataloader(
-    logger, tokenizer, dyeConfig: "DyeConfig", *, bs_train: int, bs_val: int,
+def init_dataloaders(
+    logger: "Logger",
+    tokenizer,
+    labels: "list[DyeLabel]",
+    bs_train: int,
+    bs_val: int,
 ):
-    full_dataset = tokendye.dataset.from_jsonl5(DATA_PATH, tokenizer, dyeConfig.labels)
+    full_dataset = tokendye.dataset.from_jsonl5(DATA_PATH, tokenizer, labels)
     train_size = int(0.8 * len(full_dataset))
     val_size = len(full_dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(
@@ -112,22 +134,33 @@ def init_dataloader(
     )
 
     if SANITY_CHECK:
-        logger.info("Sanity check")
         batch = next(iter(train_dataloader))
-        print("input_ids:\n", batch["input_ids"][0])
-        print("Decoded input_ids:\n", tokenizer.decode(batch["input_ids"][0]))
-        print("dye_mask:\n", batch["dye_mask"][0])
-        print("labels (non -100 positions):")
         valid_positions = (batch["labels"][0] != -100).nonzero(as_tuple=True)[0]
-        print(tokenizer.decode(batch["input_ids"][0][valid_positions]))
+        msgs = [
+            "Sanity check",
+            "input_ids:",
+            batch["input_ids"][0],
+            "Decoded input_ids:",
+            tokenizer.decode(batch["input_ids"][0]),
+            "dye_mask:",
+            batch["dye_mask"][0],
+            "labels (non -100 positions):",
+            tokenizer.decode(batch["input_ids"][0][valid_positions]),
+        ]
+
+        for msg in msgs:
+            logger.info(msg)
 
         raise RuntimeError("Sanity check complete - stopping here")
 
     return train_dataloader, val_dataloader
 
 
-def setup_logging(output_dir: "Path", name: str | None) -> "Logger":
-
+def setup_logger(workspace: "Path", name: str, handler=None) -> "Logger":
+    """
+    Args:
+        `workspace`: Caller should make sure the folder exists
+    """
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
 
@@ -137,16 +170,22 @@ def setup_logging(output_dir: "Path", name: str | None) -> "Logger":
     )
 
     if name:
-        log_path = output_dir / f"{name}.log"
+        log_path = workspace / f"{name}.log"
         file_handler = logging.FileHandler(log_path, encoding="utf-8", mode="w")
         file_handler.setFormatter(fmt)
         file_handler.setLevel(logging.DEBUG)
         logger.addHandler(file_handler)
 
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(fmt)
-    stream_handler.setLevel(logging.INFO)
-    logger.addHandler(stream_handler)
+    if handler:
+        handler.setFormatter(fmt)
+        logger.addHandler(handler)
+    else:
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(fmt)
+        stream_handler.setLevel(logging.INFO)
+        logger.addHandler(stream_handler)
+
+    logger.info("╰(*°▽°*)╯ Setup logger successfully!!")
 
     return logger
 
@@ -160,14 +199,20 @@ if __name__ == "__main__":
         "tool_callback",
         "file_text",
     ]
-
-    logger = setup_logging(BASE, None)
-    model, _ = load_model_and_tokenizer(logger)
-    dyeConfig = DyeConfig(
+    model, _ = load_model_and_tokenizer()
+    mdc = ModelDyeConfig(
         model_name=MODEL_NAME,
         labels=[DyeLabel(id=i, name=n) for i, n in enumerate(DYE_TYPES)],
-        rank=8,
         d_model=model.config.hidden_size,
         dtype=str(model.dtype).split(".")[-1],
     )
-    dyeConfig.save()
+    mdc.save()
+
+
+class MyLogHandler(logging.Handler):
+    def __init__(self, parent_logger: "Logger"):
+        self.parent_logger = parent_logger
+        super().__init__(logging.INFO)
+
+    def emit(self, record: logging.LogRecord):
+        self.parent_logger.log(record.levelno, record.message)

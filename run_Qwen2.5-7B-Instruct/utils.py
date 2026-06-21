@@ -4,17 +4,18 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import tokendye.dataset
 import torch
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
+import tokendye.dataset
+
 if TYPE_CHECKING:
     from logging import Logger
 
-    from tokendye import DyeConfig
     from transformers import TokenizersBackend
 
+    from tokendye import ModelDyeConfig
 
 
 MODEL_NAME = "Qwen2.5-7B-Instruct"
@@ -23,6 +24,7 @@ DATA_PATH = "./dataset/v0.1a.jsonl5"
 
 BASE = Path(__file__).parent
 SANITY_CHECK = bool(os.getenv("SANITY_CHECK", False))
+
 
 def load_model_and_tokenizer(logger: "Logger"):
     model_path = BASE / MODEL_NAME
@@ -52,7 +54,7 @@ def load_model_and_tokenizer(logger: "Logger"):
 def init_dataloader(
     logger,
     tokenizer,
-    dyeConfig: "DyeConfig",
+    dyeConfig: "ModelDyeConfig",
     *,
     bs_train: int,
     bs_val: int,
@@ -167,10 +169,9 @@ if __name__ == "__main__":
     ]
     logger = setup_logging(BASE, None)
     model, _ = load_model_and_tokenizer(logger)
-    dyeConfig = DyeConfig(
+    dyeConfig = ModelDyeConfig(
         model_name=MODEL_NAME,
         labels=[DyeLabel(id=i, name=n) for i, n in enumerate(DYE_TYPES)],
-        rank=8,
         d_model=model.config.hidden_size,
         dtype=str(model.dtype).split(".")[-1],
     )

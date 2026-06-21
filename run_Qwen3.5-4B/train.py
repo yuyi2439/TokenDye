@@ -1,45 +1,82 @@
 import os
 from datetime import datetime
+from logging import Logger
+from pathlib import Path
 
 import torch
-from tokendye import DyeConfig, DyeLayer
 from torch import nn
 from transformers import get_cosine_schedule_with_warmup
-from utils import BASE, init_dataloader, load_model_and_tokenizer, setup_logging
+from utils import (
+    BASE,
+    MyLogHandler,
+    TrainConfig,
+    init_dataloaders,
+    load_model_and_tokenizer,
+    setup_logger,
+)
+
+from tokendye import DyeModule, ModelDyeConfig
 
 RESUME_TRAINING = bool(os.getenv("RESUME_TRAINING", False))
-TOTAL_EPOCHS = 35
-PATIENCE = 10
-bs_train = 4
-bs_val = 8
-lr = 1e-5
+
 
 # ====================================================
 
-RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
-dyeConfig = DyeConfig.load(BASE / "DyeConfig.json")
 
-OUTPUT_DIR = BASE / ".outputs" / f"{RUN_TS}-rank_{dyeConfig.rank}"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def run_trains(
+    title: str,
+    workspace: "Path",
+    tcs: "list[TrainConfig]",
+    mdc: "ModelDyeConfig",
+    bs_train=4,
+    bs_val=8,
+):
+    logger = setup_logger(workspace, title)
 
-logger = setup_logging(OUTPUT_DIR, "train")
+    logger.debug("Loading model and tokenizer")
+    model, tokenizer = load_model_and_tokenizer()
+    logger.info("Loaded model and tokenizer")
 
-
-def main():
-    logger.info("Dye Config: " + dyeConfig.model_dump_json(indent=2))
-    logger.info(f"OUTPUT_DIR: {OUTPUT_DIR}")
-
-    model, tokenizer = load_model_and_tokenizer(logger)
-
-    logger.info("Loading dataloader...")
-    train_dataloader, val_dataloader = init_dataloader(
-        logger, tokenizer, dyeConfig, bs_train=bs_train, bs_val=bs_val,
+    logger.debug("Loading dataloader...")
+    dataloaders = init_dataloaders(
+        logger,
+        tokenizer,
+        mdc.labels,
+        bs_train,
+        bs_val,
     )
+    logger.info("Loaded dataloader...")
 
-    logger.info("Setting up DyeLayer...")
+    log_handler = MyLogHandler(logger)
+
+    for tc in tcs:
+        case_name = f"rank_{tc.rank}-lr_{tc.lr:.2e}"
+        logger.info(f"Start train case: {case_name}")
+
+        sub_workspace = workspace / case_name
+        sub_workspace.mkdir(parents=True, exist_ok=True)
+
+        sub_logger = setup_logger(sub_workspace, f"train-{case_name}", log_handler)
+
+        train_dye(sub_logger, model, sub_workspace, mdc, tc, dataloaders)
+
+
+def train_dye(
+    logger: "Logger",
+    model,
+    workspace: "Path",
+    mdc: "ModelDyeConfig",
+    tc: "TrainConfig",
+    dataloaders,
+):
+    logger.info(f"WorkSpace: {workspace}")
+    logger.info("ModelDyeConfig: " + mdc.model_dump_json(indent=2))
+    logger.info("TrainConfig: " + tc.model_dump_json(indent=2))
+
+    logger.info("Setting up DyeModule...")
     dye_modules = nn.ModuleDict()
-    for dye_label in dyeConfig.labels:
-        module = DyeLayer(dyeConfig).to(model.device)
+    for dye_label in mdc.labels:
+        module = DyeModule(mdc, tc.rank).to(model.device)
         module.requires_grad_(True)
         dye_modules[dye_label.name] = module
 
@@ -53,7 +90,7 @@ def main():
         flat_mask = dye_mask.reshape(-1)
 
         new_out = flat_out
-        for dye_label in dyeConfig.labels:
+        for dye_label in mdc.labels:
             pos = (flat_mask == dye_label.id).nonzero(as_tuple=True)[0]
             if pos.numel():
                 updated = dye_modules[dye_label.name](flat_out[pos])
@@ -63,18 +100,16 @@ def main():
     model.model.embed_tokens._dye_mask = None
     model.model.embed_tokens.register_forward_hook(dye_hook)
 
-    optimizer = torch.optim.AdamW(dye_modules.parameters(), lr)
+    optimizer = torch.optim.AdamW(dye_modules.parameters(), tc.lr)
 
-    total_steps = TOTAL_EPOCHS * len(train_dataloader)
+    train_dataloader, val_dataloader = dataloaders
+
+    total_steps = tc.total_epochs * len(train_dataloader)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=max(1, int(0.1 * total_steps)),
         num_training_steps=total_steps,
     )
-
-    # ---- checkpoint 保存配置 ----
-    DYE_WEIGHTS_PATH = os.path.join(OUTPUT_DIR, "dye_modules_best.pt")
-    TRAIN_STATE_PATH = os.path.join(OUTPUT_DIR, "train_state_best.pt")
 
     best_val_loss = float("inf")
     best_val_loss_epoch = 1
@@ -97,15 +132,20 @@ def main():
             f"已加载 checkpoint，恢复到 epoch {start_epoch}，上次 val_loss={state['best_val_loss']:.4f}",
         )
 
+    tc.save(workspace)
+    logger.info("Saved TrainConfig")
+
     logger.info("Start training")
-    for epoch in range(start_epoch, TOTAL_EPOCHS + 1):
+    is_te_not_enough = False
+    for epoch in range(start_epoch, tc.total_epochs + 1):
         # Patience Check
-        if epoch == best_val_loss_epoch + PATIENCE:
+        if epoch == best_val_loss_epoch + tc.patience:
             logger.info("Patience exhausted")
             return
-        if epoch + PATIENCE == TOTAL_EPOCHS:
-            logger.error("Should improve TOTAL_EPOCHS")
+        if epoch + tc.patience >= tc.total_epochs:
+            is_te_not_enough = True
 
+        # Train
         model.train()
         total_loss = 0.0
         for batch in train_dataloader:
@@ -160,7 +200,7 @@ def main():
 
         avg_val_loss = total_val_loss / len(val_dataloader)
         logger.info(
-            f"Epoch {epoch}/{TOTAL_EPOCHS} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.2e}",
+            f"Epoch {epoch}/{tc.total_epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.2e}",
         )
 
         # ---- 保存最优checkpoint（仅当val loss刷新最优时）----
@@ -178,28 +218,37 @@ def main():
                     "epoch": epoch,
                     "val_loss": avg_val_loss,
                 },
-                DYE_WEIGHTS_PATH,
+                workspace / "dye_modules_best.pt",
             )
 
-            # B. 完整训练状态（用于断点续训）
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "scheduler_state_dict": scheduler.state_dict(),
-                    "dye_state_dicts": {
-                        label: mod.state_dict() for label, mod in dye_modules.items()
-                    },
-                    "best_val_loss": best_val_loss,
-                    "train_loss": avg_train_loss,
-                },
-                TRAIN_STATE_PATH,
-            )
+            # # B. 完整训练状态（用于断点续训）
+            # torch.save(
+            #     {
+            #         "epoch": epoch,
+            #         "optimizer_state_dict": optimizer.state_dict(),
+            #         "scheduler_state_dict": scheduler.state_dict(),
+            #         "dye_state_dicts": {
+            #             label: mod.state_dict() for label, mod in dye_modules.items()
+            #         },
+            #         "best_val_loss": best_val_loss,
+            #         "train_loss": avg_train_loss,
+            #     },
+            #     workspace / "train_state_best.pt",
+            # )
 
             logger.info(
                 f"  ↳ 新的最优 checkpoint (val_loss={avg_val_loss:.4f})，已保存",
             )
+    if is_te_not_enough:
+        logger.error("Should improve total_epochs")
 
 
 if __name__ == "__main__":
-    main()
+    tc = TrainConfig(rank=8, lr=1e-4)
+    mdc = ModelDyeConfig.load(BASE / "DyeConfig.json")
+
+    RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
+    workspace = BASE / ".outputs" / RUN_TS
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    run_trains("run_train", workspace, [tc], mdc)

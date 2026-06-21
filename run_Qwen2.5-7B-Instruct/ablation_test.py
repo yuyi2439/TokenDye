@@ -16,18 +16,19 @@
 import json
 import os
 
-import tokendye
 import torch
-from tokendye import DyeConfig
-from tokendye.dataset import _build_sequence
 from torch import nn
 from utils import BASE, load_model_and_tokenizer, setup_logging
+
+import tokendye
+from tokendye import ModelDyeConfig
+from tokendye.dataset import _build_sequence
 
 OUTPUTS = BASE / ".outputs"
 OUTPUT_DIR = OUTPUTS / (os.getenv("OUTPUT_DIR") or sorted(os.listdir(OUTPUTS))[-1])
 
 logger = setup_logging(OUTPUT_DIR, "ablation_test")
-dyeConfig = DyeConfig.load(BASE / "DyeConfig.json")
+dyeConfig = ModelDyeConfig.load(BASE / "DyeConfig.json")
 
 
 def load_model_and_dye():
@@ -45,7 +46,7 @@ def load_model_and_dye():
 
     dye_modules = nn.ModuleDict()
     for dye_label in dyeConfig.labels:
-        module = tokendye.DyeLayer(dyeConfig).to(model.device)
+        module = tokendye.DyeModule(dyeConfig, 8).to(model.device)
         module.load_state_dict(dye_state_dicts[dye_label.name])
         module.eval()
         # module.requires_grad_(False)
@@ -118,7 +119,9 @@ def run_one_case(model, tokenizer, case):
 
     # A. 正常染色
     input_ids_a, dye_mask_a, _ = _build_sequence(
-        {"segments": segments}, tokenizer, dye_labels,
+        {"segments": segments},
+        tokenizer,
+        dye_labels,
     )
     out_a = run_inference(model, tokenizer, input_ids_a, dye_mask_a)
     logger.info(f"A. 正常染色   -> {out_a}")
@@ -135,7 +138,9 @@ def run_one_case(model, tokenizer, case):
         {"dye": swap_label(s["dye"]), "text": s["text"]} for s in segments
     ]
     input_ids_b, dye_mask_b, _ = _build_sequence(
-        {"segments": swapped_segments}, tokenizer, dye_labels,
+        {"segments": swapped_segments},
+        tokenizer,
+        dye_labels,
     )
     out_b = run_inference(model, tokenizer, input_ids_b, dye_mask_b)
     logger.info(f"B. 染色互换   -> {out_b}")
@@ -143,7 +148,9 @@ def run_one_case(model, tokenizer, case):
     # C. 不染色（全部走 dye=-1，原始通路）
     no_dye_segments = [{"dye": None, "text": s["text"]} for s in segments]
     input_ids_c, dye_mask_c, _ = _build_sequence(
-        {"segments": no_dye_segments}, tokenizer, dye_labels,
+        {"segments": no_dye_segments},
+        tokenizer,
+        dye_labels,
     )
     out_c = run_inference(model, tokenizer, input_ids_c, dye_mask_c)
     logger.info(f"C. 不染色     -> {out_c}")

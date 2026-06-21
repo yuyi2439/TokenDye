@@ -6,17 +6,17 @@ from torch import nn
 if TYPE_CHECKING:
     from torch import Tensor
 
-    from .config import DyeConfig
+    from .config import ModelDyeConfig
 
 
 class DyeModule(nn.Module):
     def __init__(
         self,
-        config: "DyeConfig",
+        config: "ModelDyeConfig",
+        rank: int,
         alpha: float | None = None,
     ):
         super().__init__()
-        rank = config.rank
         d_model = config.d_model
         dtype = getattr(torch, config.dtype)
 

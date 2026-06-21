@@ -9,15 +9,16 @@ if TYPE_CHECKING:
     from os import PathLike
 
 
-class DyeConfig(BaseModel):
+class ModelDyeConfig(BaseModel):
+    """Base model's dye config"""
+
     model_name: str
     labels: list[DyeLabel]
-    rank: int
     d_model: int
     dtype: str
 
     def save(self, path: Optional["PathLike | str"] = None, indent: int = 2):
-        path = path or f"DyeConfig_{self.model_name}.json"
+        path = path or "DyeConfig.json"
         p = Path(path)
         p.write_text(self.model_dump_json(indent=indent))
 
