@@ -2,9 +2,9 @@ import os
 from datetime import datetime
 from logging import Logger
 from pathlib import Path
+from typing import Optional
 
 import torch
-from torch import nn
 from transformers import get_cosine_schedule_with_warmup
 from utils import (
     BASE,
@@ -15,7 +15,8 @@ from utils import (
     setup_logger,
 )
 
-from tokendye import DyeModule, ModelDyeConfig
+from tokendye import ModelDyeConfig
+from tokendye.module import setup_dye_modules
 
 RESUME_TRAINING = bool(os.getenv("RESUME_TRAINING", False))
 
@@ -24,14 +25,22 @@ RESUME_TRAINING = bool(os.getenv("RESUME_TRAINING", False))
 
 
 def run_trains(
-    title: str,
+    title: str,  # TODO: Too useless
     workspace: "Path",
     tcs: "list[TrainConfig]",
     mdc: "ModelDyeConfig",
+    *,
+    logger: "Optional[Logger]" = None,
+    unify_dye_weight=False,
     bs_train=4,
     bs_val=8,
 ):
-    logger = setup_logger(workspace, title)
+    logger = logger or setup_logger(workspace, title)
+
+    _seed = torch.initial_seed()
+    logger.debug(f"Initial Seed: {_seed}")
+
+    logger.info("ModelDyeConfig: " + mdc.model_dump_json(indent=2))
 
     logger.debug("Loading model and tokenizer")
     model, tokenizer = load_model_and_tokenizer()
@@ -47,8 +56,6 @@ def run_trains(
     )
     logger.info("Loaded dataloader...")
 
-    log_handler = MyLogHandler(logger)
-
     for tc in tcs:
         case_name = f"rank_{tc.rank}-lr_{tc.lr:.2e}"
         logger.info(f"Start train case: {case_name}")
@@ -56,29 +63,33 @@ def run_trains(
         sub_workspace = workspace / case_name
         sub_workspace.mkdir(parents=True, exist_ok=True)
 
+        log_handler = MyLogHandler(logger)
         sub_logger = setup_logger(sub_workspace, f"train-{case_name}", log_handler)
 
-        train_dye(sub_logger, model, sub_workspace, mdc, tc, dataloaders)
+        if unify_dye_weight:
+            torch.manual_seed(_seed)
+            torch.cuda.manual_seed_all(_seed)
+
+        train_dye(model, dataloaders, sub_logger, sub_workspace, mdc, tc)
+
+        logger.info(f"(≧∀≦)ゞFinish train case successfully: {case_name}\n")
 
 
 def train_dye(
-    logger: "Logger",
     model,
+    dataloaders: tuple,
+    logger: "Logger",
     workspace: "Path",
     mdc: "ModelDyeConfig",
     tc: "TrainConfig",
-    dataloaders,
 ):
     logger.info(f"WorkSpace: {workspace}")
-    logger.info("ModelDyeConfig: " + mdc.model_dump_json(indent=2))
     logger.info("TrainConfig: " + tc.model_dump_json(indent=2))
 
     logger.info("Setting up DyeModule...")
-    dye_modules = nn.ModuleDict()
-    for dye_label in mdc.labels:
-        module = DyeModule(mdc, tc.rank).to(model.device)
-        module.requires_grad_(True)
-        dye_modules[dye_label.name] = module
+    dye_modules = setup_dye_modules(mdc, tc.rank, model.device)
+    dye_modules.train()
+    dye_modules.requires_grad_(True)
 
     def dye_hook(module, input, output):
         dye_mask = getattr(module, "_dye_mask", None)
@@ -214,7 +225,8 @@ def train_dye(
                     "dye_state_dicts": {
                         label: mod.state_dict() for label, mod in dye_modules.items()
                     },
-                    "dye_types": list(dye_label),
+                    "model_dye_config": mdc.model_dump_json(),
+                    "train_config": tc.model_dump_json(),
                     "epoch": epoch,
                     "val_loss": avg_val_loss,
                 },
@@ -240,15 +252,15 @@ def train_dye(
                 f"  ↳ 新的最优 checkpoint (val_loss={avg_val_loss:.4f})，已保存",
             )
     if is_te_not_enough:
-        logger.error("Should improve total_epochs")
+        logger.error("Should improve total_epochs or lr")
 
 
 if __name__ == "__main__":
-    tc = TrainConfig(rank=8, lr=1e-4)
-    mdc = ModelDyeConfig.load(BASE / "DyeConfig.json")
+    _tc = TrainConfig(rank=8, lr=1e-4)
+    _mdc = ModelDyeConfig.load(BASE / "DyeConfig.json")
 
-    RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
-    workspace = BASE / ".outputs" / RUN_TS
-    workspace.mkdir(parents=True, exist_ok=True)
+    _RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _workspace = BASE / ".outputs" / _RUN_TS
+    _workspace.mkdir(parents=True, exist_ok=True)
 
-    run_trains("run_train", workspace, [tc], mdc)
+    run_trains("run_train", _workspace, [_tc], _mdc)

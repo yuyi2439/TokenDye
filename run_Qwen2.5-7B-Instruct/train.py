@@ -18,7 +18,7 @@ lr = 3e-4
 # ====================================================
 
 RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
-dyeConfig = ModelDyeConfig.load(BASE / "DyeConfig.json")
+mdc = ModelDyeConfig.load(BASE / "DyeConfig.json")
 RANK = 8  # LoRA rank for dye modules
 
 OUTPUT_DIR = BASE / ".outputs" / RUN_TS
@@ -28,7 +28,7 @@ logger = setup_logging(OUTPUT_DIR, "train")
 
 
 def main():
-    logger.info("Dye Config: " + dyeConfig.model_dump_json(indent=2))
+    logger.info("Dye Config: " + mdc.model_dump_json(indent=2))
     logger.info(f"OUTPUT_DIR: {OUTPUT_DIR}")
 
     model, tokenizer = load_model_and_tokenizer(logger)
@@ -37,17 +37,17 @@ def main():
     train_dataloader, val_dataloader = init_dataloader(
         logger,
         tokenizer,
-        dyeConfig,
+        mdc,
         bs_train=bs_train,
         bs_val=bs_val,
     )
 
     logger.info("Setting up DyeLayer...")
     dye_modules = nn.ModuleDict()
-    for dye_label in dyeConfig.labels:
-        module = DyeModule(dyeConfig, RANK).to(model.device)
+    for _dye_label in mdc.labels:
+        module = DyeModule(mdc, RANK).to(model.device)
         module.requires_grad_(True)
-        dye_modules[dye_label.name] = module
+        dye_modules[_dye_label.name] = module
 
     def dye_hook(module, input, output):
         dye_mask = getattr(module, "_dye_mask", None)
@@ -59,7 +59,7 @@ def main():
         flat_mask = dye_mask.reshape(-1)
 
         new_out = flat_out
-        for dye_label in dyeConfig.labels:
+        for dye_label in mdc.labels:
             pos = (flat_mask == dye_label.id).nonzero(as_tuple=True)[0]
             if pos.numel():
                 updated = dye_modules[dye_label.name](flat_out[pos])
@@ -180,7 +180,8 @@ def main():
                     "dye_state_dicts": {
                         label: mod.state_dict() for label, mod in dye_modules.items()
                     },
-                    "dye_types": list(dye_label),
+                    "model_dye_config": mdc,
+                    "rank": RANK,
                     "epoch": epoch,
                     "val_loss": avg_val_loss,
                 },

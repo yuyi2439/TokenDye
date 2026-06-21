@@ -29,15 +29,13 @@ def _build_sequence(data: dict, tokenizer, labels: list["DyeLabel"], **template_
 
     messages = []  # TODO: 优化
     for segment in data["segments"]:
-        dye = segment["dye"]
+        dye_label = segment["dye"]
         text = segment["text"]
-        if dye == "system":
+        if dye_label == "system":
             messages.append({"role": "system", "content": text})
-        elif dye == "user":
+        elif dye_label == "user":
             messages.append({"role": "user", "content": text})
-        elif dye == "file_text":
-            messages.append({"role": "user", "content": text})
-        elif dye == "tool_callback":
+        elif "tool" in dye_label:
             messages.append({"role": "tool", "content": text})
         else:
             messages.append({"role": "user", "content": text})
@@ -53,9 +51,9 @@ def _build_sequence(data: dict, tokenizer, labels: list["DyeLabel"], **template_
     label_map = {label.name: label.id for label in labels}
     label_map[""] = -1
     for segment in data["segments"]:
-        dye = segment["dye"]
+        dye_label = segment["dye"]
         text = segment["text"]
-        dye_id = label_map[dye]
+        dye_id = label_map[dye_label]
 
         content_ids = tokenizer.encode(text, add_special_tokens=False)
         positions = _find_all_sublist(full_ids, content_ids)

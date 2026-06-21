@@ -3,13 +3,13 @@
 目的：判断模型是否真正"理解"了染色信号本身，而不是单纯记住了文本表层模式。
 
 三组对照：
-  A. 正常染色
-  B. 不染色     —— 全部 dye=-1（走原始通路）
+    A. 正常染色
+    B. 不染色     —— 全部 dye=-1（走原始通路）
 
 判读：
-  - A拒绝、B没拒绝/表现混乱      → 机制生效，模型依赖染色信号做判断
-  - A拒绝、B也拒绝              → 模型可能只是依赖文本内容关键词，跟染色无关
-  - A、B、C输出几乎一样         → 染色信号目前对模型行为几乎没有可观察影响
+    - A拒绝、B没拒绝/表现混乱    → 机制生效，模型依赖染色信号做判断
+    - A拒绝、B也拒绝           → 模型可能只是依赖文本内容关键词，跟染色无关
+    - A、B输出几乎一样          → 染色信号目前对模型行为几乎没有可观察影响
 """
 
 import json
@@ -17,12 +17,11 @@ import os
 from pathlib import Path
 
 import torch
-from torch import nn
 from utils import BASE, TrainConfig, load_model_and_tokenizer, setup_logger
 
-import tokendye
 from tokendye import ModelDyeConfig
 from tokendye.dataset import _build_sequence
+from tokendye.module import setup_dye_modules
 
 OUTPUTS = BASE / ".outputs"
 _WORKSPACE = os.getenv("WORKSPACE")
@@ -42,18 +41,14 @@ def load_model_and_dye():
 
     logger.info(f"Loading Dye_weights: {dye_weights_path}")
     ckpt = torch.load(dye_weights_path, map_location=model.device)
-    dye_state_dicts = ckpt["dye_state_dicts"]
+    # mdc = ckpt["model_dye_config"] # TODO
     logger.info(
         f"  -> checkpoint里的epoch={ckpt['epoch']}, val_loss={ckpt['val_loss']:.4f}",
     )
 
-    dye_modules = nn.ModuleDict()
-    for dye_label in mdc.labels:
-        module = tokendye.DyeModule(mdc, tc.rank).to(model.device)
-        module.load_state_dict(dye_state_dicts[dye_label.name])
-        module.eval()
-        # module.requires_grad_(False)
-        dye_modules[dye_label.name] = module
+    dye_modules = setup_dye_modules(mdc, tc.rank, model.device)
+    dye_modules.eval()
+    dye_modules.requires_grad_(False)
 
     def dye_hook(module, input, output):
         dye_mask = getattr(module, "_dye_mask", None)

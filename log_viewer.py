@@ -96,9 +96,11 @@ axes[1].legend()
 axes[1].grid(True, alpha=0.3)
 axes[1].set_title("Gradient Norm")
 
+img_path = BASE / "train_figure.png"
+
 plt.suptitle(BASE.name)
 plt.tight_layout()
-plt.savefig(BASE / "train_figure.png", dpi=200)
+plt.savefig(img_path, dpi=200)
 # plt.show()
 
-print(f"Saved in {BASE}")
+print(f"Saved in {img_path}")

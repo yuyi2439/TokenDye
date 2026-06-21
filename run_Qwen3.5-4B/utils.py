@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 
 MODEL_NAME = "Qwen3.5-4B"
-DATA_PATH = "./dataset/v0.1a.jsonl5"
+DATA_PATH = "./dataset/v0.1.jsonl5"
 
 
 BASE = Path(__file__).parent
@@ -185,7 +185,7 @@ def setup_logger(workspace: "Path", name: str, handler=None) -> "Logger":
         stream_handler.setLevel(logging.INFO)
         logger.addHandler(stream_handler)
 
-    logger.info("╰(*°▽°*)╯ Setup logger successfully!!")
+    logger.info(f"╰(*°▽°*)╯ Setup logger({name}) successfully!!")
 
     return logger
 
