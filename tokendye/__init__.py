@@ -4,4 +4,4 @@ from .module import DyeModule
 
 __all__ = ["ModelDyeConfig", "DyeLabel", "DyeModule"]
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
