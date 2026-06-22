@@ -10,19 +10,26 @@ if TYPE_CHECKING:
     from .label import DyeLabel
 
 
-def _build_sequence(data: dict, tokenizer, labels: list["DyeLabel"], **template_kwargs):
-    """Build sequence for module
-    `data`: looks like:  (If no target, it maybe testing)
-    ```
-    {
-        "segments": [
-            {"dye": "system", "text": "xxx"},
-            {"dye": "user", "text": "xxx"},
-            ...
-        ],
-        "target": "xxx"
-    }
-    ```
+def _build_sequence(
+    data: dict, tokenizer, labels: list["DyeLabel"], build_mask=True, **template_kwargs
+):
+    """Build sequence
+
+    Args:
+        build_mask: Whether to build dye mask. If False, `dye_mask` will be [-1] * len(input_ids)
+
+    Notes:
+        data: looks like:  (If no target, it maybe testing)
+        ```
+        {
+            "segments": [
+                {"dye": "system", "text": "xxx"},
+                {"dye": "user", "text": "xxx"},
+                ...
+            ],
+            "target": "xxx"
+        }
+        ```
     """
     input_ids = []
     dye_mask = []
@@ -38,7 +45,7 @@ def _build_sequence(data: dict, tokenizer, labels: list["DyeLabel"], **template_
         elif "tool" in dye_label:
             messages.append({"role": "tool", "content": text})
         else:
-            messages.append({"role": "user", "content": text})
+            raise ValueError(f"Unknown dye label: {dye_label}")
 
     full_ids: list[int] = tokenizer.apply_chat_template(
         messages,
@@ -46,29 +53,29 @@ def _build_sequence(data: dict, tokenizer, labels: list["DyeLabel"], **template_
         add_generation_prompt=False,
     )["input_ids"]  # TODO: 留着attention_mask或许有用
 
-    # 2. 对每段content单独encode，在full_ids里定位边界，构建dye_mask
+    # 构建dye_mask
     dye_mask = [-1] * len(full_ids)
-    label_map = {label.name: label.id for label in labels}
-    label_map[""] = -1
-    for segment in data["segments"]:
-        dye_label = segment["dye"]
-        text = segment["text"]
-        dye_id = label_map[dye_label]
+    if build_mask:
+        label_map = {label.name: label.id for label in labels}
+        for segment in data["segments"]:
+            dye_label = segment["dye"]
+            text = segment["text"]
+            dye_id = label_map[dye_label]
 
-        content_ids = tokenizer.encode(text, add_special_tokens=False)
-        positions = _find_all_sublist(full_ids, content_ids)
+            content_ids = tokenizer.encode(text, add_special_tokens=False)
+            positions = _find_all_sublist(full_ids, content_ids)
 
-        if len(positions) == 0:
-            raise ValueError(f"content not found in full_ids: {text!r}")
-        if len(positions) > 1:
-            raise ValueError(
-                f"ambiguous match ({len(positions)} hits), "
-                f"two segments have identical content: {text!r}",
-            )
+            if len(positions) == 0:
+                raise ValueError(f"content not found in full_ids: {text!r}")
+            if len(positions) > 1:
+                raise ValueError(
+                    f"ambiguous match ({len(positions)} hits), "
+                    f"two segments have identical content: {text!r}",
+                )
 
-        pos = positions[0]
-        for i in range(len(content_ids)):
-            dye_mask[pos + i] = dye_id
+            pos = positions[0]
+            for i in range(len(content_ids)):
+                dye_mask[pos + i] = dye_id
 
     # 从apply_chat_template提取generation prompt
     context_len = len(full_ids)

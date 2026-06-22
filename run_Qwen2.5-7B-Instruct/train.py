@@ -50,13 +50,13 @@ def main():
         dye_modules[_dye_label.name] = module
 
     def dye_hook(module, input, output):
-        dye_mask = getattr(module, "_dye_mask", None)
-        if dye_mask is None:
+        dye_mask_t = getattr(module, "_dye_mask_t", None)
+        if dye_mask_t is None:
             return output
 
         batch, seq, d_model = output.shape
         flat_out = output.reshape(-1, d_model)
-        flat_mask = dye_mask.reshape(-1)
+        flat_mask = dye_mask_t.reshape(-1)
 
         new_out = flat_out
         for dye_label in mdc.labels:
@@ -66,7 +66,7 @@ def main():
                 new_out = new_out.index_copy(0, pos, updated)
         return new_out.view(batch, seq, d_model)
 
-    model.model.embed_tokens._dye_mask = None
+    model.model.embed_tokens._dye_mask_t = None
     model.model.embed_tokens.register_forward_hook(dye_hook)
 
     optimizer = torch.optim.AdamW(dye_modules.parameters(), lr)
@@ -117,10 +117,10 @@ def main():
         for batch in train_dataloader:
             input_ids = batch["input_ids"].to("cuda")
             attention_mask = batch["attention_mask"].to("cuda")
-            dye_mask = batch["dye_mask"].to("cuda")
+            dye_mask_t = batch["dye_mask"].to("cuda")
             labels = batch["labels"].to("cuda")
 
-            model.model.embed_tokens._dye_mask = dye_mask
+            model.model.embed_tokens._dye_mask_t = dye_mask_t
 
             outputs = model(
                 input_ids=input_ids,
@@ -152,10 +152,10 @@ def main():
             for batch in val_dataloader:
                 input_ids = batch["input_ids"].to("cuda")
                 attention_mask = batch["attention_mask"].to("cuda")
-                dye_mask = batch["dye_mask"].to("cuda")
+                dye_mask_t = batch["dye_mask"].to("cuda")
                 labels = batch["labels"].to("cuda")
 
-                model.model.embed_tokens._dye_mask = dye_mask
+                model.model.embed_tokens._dye_mask_t = dye_mask_t
 
                 outputs = model(
                     input_ids=input_ids,

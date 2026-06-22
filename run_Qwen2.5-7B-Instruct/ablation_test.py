@@ -53,18 +53,18 @@ def load_model_and_dye():
         dye_modules[dye_label.name] = module
 
     def dye_hook(module, input, output):
-        dye_mask = getattr(module, "_dye_mask", None)
-        if dye_mask is None:
+        dye_mask_t = getattr(module, "_dye_mask_t", None)
+        if dye_mask_t is None:
             return output
 
         batch, seq, d_model = output.shape
         # 关键修正：generate()自回归生成时，每步只传入新token，
         # dye_mask长度对不上output长度时，说明已经进入生成阶段，
         # 新生成的token不应该被染色（它们是模型自己的输出，不是外部输入）
-        if dye_mask.shape[1] != seq:
+        if dye_mask_t.shape[1] != seq:
             return output  # 直接跳过染色，走原始通路
         flat_out = output.reshape(-1, d_model)
-        flat_mask = dye_mask.reshape(-1)
+        flat_mask = dye_mask_t.reshape(-1)
 
         new_out = flat_out
         for dye_label in dyeConfig.labels:
@@ -74,7 +74,7 @@ def load_model_and_dye():
                 new_out = new_out.index_copy(0, pos, updated)
         return new_out.view(batch, seq, d_model)
 
-    model.model.embed_tokens._dye_mask = None
+    model.model.embed_tokens._dye_mask_t = None
     model.model.embed_tokens.register_forward_hook(dye_hook)
 
     return model, tokenizer
@@ -86,7 +86,7 @@ def run_inference(model, tokenizer, input_ids, dye_mask, max_new_tokens=1024):
     # 单条样本、无padding，全部位置都有效，显式传入避免pad_token==eos_token时的歧义警告
     attention_mask_t = torch.ones_like(input_ids_t)
 
-    model.model.embed_tokens._dye_mask = dye_mask_t
+    model.model.embed_tokens._dye_mask_t = dye_mask_t
 
     with torch.no_grad():
         output = model.generate(
@@ -101,7 +101,7 @@ def run_inference(model, tokenizer, input_ids, dye_mask, max_new_tokens=1024):
     text = tokenizer.decode(generated, skip_special_tokens=True)
 
     # 重置，避免影响下一次调用（虽然每次都会重新赋值，这里是防御性写法）
-    model.model.embed_tokens._dye_mask = None
+    model.model.embed_tokens._dye_mask_t = None
     return text
 
 
