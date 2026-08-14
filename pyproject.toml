@@ -1,7 +1,7 @@
 [project]
 name = "tokendye"
 version = "0.3.0a"
-description = "Add your description here"
+description = "TokenDye: a lightweight way to dye LLM hidden states with role labels"
 readme = "README.md"
 authors = [
     { name = "Yausen", email = "yuyi2439@qq.com" }
@@ -14,3 +14,20 @@ dependencies = [
 [build-system]
 requires = ["uv_build>=0.11.21,<0.12.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.3",
+]
+example = [
+    "accelerate>=1.14.0",
+    "bitsandbytes>=0.50.1",
+    "transformers>=5.15.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+ignore = ["BLE001"]
