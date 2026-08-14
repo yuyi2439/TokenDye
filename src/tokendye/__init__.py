@@ -1,15 +1,15 @@
 """TokenDye: a lightweight way to dye LLM hidden states with role labels."""
 
-from .deep_embed import (
-    DeepEmbedConfig,
-    DeepEmbedController,
-    DeepEmbedDye,
-    install_deep_embed,
+from .module import (
+    Dye,
+    DyeConfig,
+    DyeController,
+    install_dye,
 )
 
 __all__ = [
-    "DeepEmbedConfig",
-    "DeepEmbedController",
-    "DeepEmbedDye",
-    "install_deep_embed",
+    "Dye",
+    "DyeConfig",
+    "DyeController",
+    "install_dye",
 ]

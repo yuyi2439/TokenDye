@@ -1,11 +1,11 @@
-"""TokenDye 示例：DeepEmbed 式逐层染色（Qwen3.5-4B）。
+"""TokenDye 示例：逐层染色（per-layer dyeing，Qwen3.5-4B）。
 
 post-embed（在 Embedding 层染色）是另一种可选方法；本示例演示的是
-DeepEmbed 式逐层缩放。
+逐层缩放。
 
 用法（uv）：
-    QWEN_MODEL_PATH=/path/to/Qwen3.5-4B uv run --group example python example/Qwen3.5/deep_embed_qwen.py
-    QWEN_MODEL_PATH=/path/to/Qwen3.5-4B uv run --group example python example/Qwen3.5/deep_embed_qwen.py --train --steps 3
+    QWEN_MODEL_PATH=/path/to/Qwen3.5-4B uv run python example/Qwen3.5/dye_qwen.py
+    QWEN_MODEL_PATH=/path/to/Qwen3.5-4B uv run python example/Qwen3.5/dye_qwen.py --train --steps 3
 
 默认模型路径：example/Qwen3.5/Qwen3.5-4B（或通过 QWEN_MODEL_PATH 环境变量指定）
 加载策略：CUDA 下优先 bitsandbytes 4-bit (nf4)，失败退回 bf16，再退回 CPU。
@@ -22,27 +22,13 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tokendye import DeepEmbedDye, install_deep_embed
+from config import DEFAULT_MODEL_PATH, LABELS
 
-LABELS = ["system", "user", "agent", "response"]
-DEFAULT_MODEL_PATH = str(Path(__file__).resolve().parent / "Qwen3.5-4B")
+from tokendye import Dye, install_dye
+from tokendye.hf import ensure_python_headers, load_model
+
 SYSTEM_CONTENT = "你是一个乐于助人的中文助手。"
 USER_CONTENT = "请用一两句话介绍你自己。"
-
-
-def _ensure_python_headers() -> None:
-    """triton 编译 CUDA 模块需要 Python.h；系统缺头文件时借用 uv 管理的 Python。"""
-    import sysconfig
-
-    include = Path(sysconfig.get_paths()["include"])
-    if (include / "Python.h").exists():
-        return
-    major_minor = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    candidates = sorted(Path.home().glob(f".local/share/uv/python/*/include/{major_minor}"))
-    if not candidates:
-        print("警告：找不到 Python.h，GPU 前向可能失败（可安装 python3.14-dev）")
-        return
-    os.environ.setdefault("C_INCLUDE_PATH", str(candidates[-1]))
 
 
 def _logits(output):
@@ -79,45 +65,10 @@ def _labeled_prompt(tokenizer):
     return prompt, enc["input_ids"], labels
 
 
-def load_model(model_path: str, device: str):
-    """优先 bnb 4-bit（CUDA），失败退回 bf16 GPU，再退回 CPU。"""
-    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
-
-    if device == "cuda":
-        try:
-            import bitsandbytes  # noqa: F401
-
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.bfloat16,
-            )
-            print("加载策略：bitsandbytes 4-bit (nf4) + CUDA")
-            return AutoModelForCausalLM.from_pretrained(
-                model_path,
-                quantization_config=quantization_config,
-                dtype=torch.bfloat16,
-                device_map="auto",
-            )
-        except Exception as exc:  # bnb 不可用 / 显存不足 / 加载失败
-            print(f"4-bit 量化不可用（{type(exc).__name__}: {exc}），尝试 bf16")
-
-    print(f"加载策略：bf16 + {device}")
-    model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.bfloat16)
-    try:
-        return model.to(device)
-    except Exception as exc:
-        if device == "cuda":
-            print(f"显存不足（{exc}），退回 CPU")
-            return model.to("cpu")
-        raise
-
-
 def main() -> None:
-    _ensure_python_headers()
+    ensure_python_headers()
     parser = argparse.ArgumentParser(
-        description="TokenDye 示例（DeepEmbed 式逐层染色）",
+        description="TokenDye 示例（逐层染色）",
     )
     parser.add_argument(
         "--model-path",
@@ -151,8 +102,8 @@ def main() -> None:
     num_layers = text_cfg.num_hidden_layers
     d_model = text_cfg.hidden_size
 
-    dye = DeepEmbedDye(LABELS, num_layers, d_model).to(model.device)  # delta 用 fp32 master
-    controller = install_deep_embed(model, dye)
+    dye = Dye(LABELS, num_layers, d_model).to(model.device)  # delta 用 fp32 master
+    controller = install_dye(model, dye)
 
     print(f"模型：{args.model_path}")
     print(f"染色配置：{len(LABELS)} 标签 × {num_layers} 层 × {d_model} 维")

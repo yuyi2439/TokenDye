@@ -1,4 +1,4 @@
-"""DeepEmbed-style dyeing: per-layer, per-label channel scaling.
+"""Per-layer, per-label channel scaling (the dye module).
 
 An alternative to the original "post-embed" method (which dyed token
 embeddings once at the embedding layer), this module applies a
@@ -25,11 +25,11 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
-__all__ = ["DeepEmbedConfig", "DeepEmbedController", "DeepEmbedDye", "install_deep_embed"]
+__all__ = ["Dye", "DyeConfig", "DyeController", "install_dye"]
 
 
 @dataclass
-class DeepEmbedConfig:
+class DyeConfig:
     """Dye configuration.
 
     Attributes:
@@ -44,12 +44,12 @@ class DeepEmbedConfig:
     d_model: int
     dtype: str = "float32"
 
-    def build(self) -> DeepEmbedDye:
+    def build(self) -> Dye:
         """Build a dye module from this config."""
-        return DeepEmbedDye.from_config(self)
+        return Dye.from_config(self)
 
 
-class DeepEmbedDye(nn.Module):
+class Dye(nn.Module):
     """Per-layer, per-label channel scaling vectors (scale = 1 + delta).
 
     `delta` has shape (num_labels, num_layers, d_model) and is initialized to
@@ -76,7 +76,7 @@ class DeepEmbedDye(nn.Module):
         )
 
     @classmethod
-    def from_config(cls, config: DeepEmbedConfig) -> DeepEmbedDye:
+    def from_config(cls, config: DyeConfig) -> Dye:
         """Build a dye module from a config."""
         return cls(
             config.labels,
@@ -129,11 +129,11 @@ class _DyeMaskHolder:
         self.labels = labels
 
 
-class DeepEmbedController:
+class DyeController:
     """Handle to the installed per-layer dye hooks.
 
     Usage:
-        controller = install_deep_embed(model, dye)
+        controller = install_dye(model, dye)
         controller.set_labels(mask)     # set the label mask before each forward
         ...
         controller.remove()             # remove all hooks
@@ -141,7 +141,7 @@ class DeepEmbedController:
 
     def __init__(
         self,
-        dye: DeepEmbedDye,
+        dye: Dye,
         layer_modules: Sequence[nn.Module],
         holder: _DyeMaskHolder,
         hook_handles: Sequence,
@@ -222,7 +222,7 @@ def _discover_layers(model: nn.Module, num_layers: int) -> list[nn.Module]:
     )
 
 
-def _make_layer_hook(dye: DeepEmbedDye, holder: _DyeMaskHolder, layer_idx: int):
+def _make_layer_hook(dye: Dye, holder: _DyeMaskHolder, layer_idx: int):
     def hook(module, args, output):
         labels = holder.labels
         if labels is None:
@@ -235,21 +235,21 @@ def _make_layer_hook(dye: DeepEmbedDye, holder: _DyeMaskHolder, layer_idx: int):
     return hook
 
 
-def install_deep_embed(
+def install_dye(
     model: nn.Module,
-    dye: DeepEmbedDye,
+    dye: Dye,
     layers: Sequence[nn.Module] | None = None,
-) -> DeepEmbedController:
+) -> DyeController:
     """Register per-layer dye hooks on the model and return a controller.
 
     Args:
         model: An HF-style model (common layer layouts are auto-detected) or
             any nn.Module.
-        dye: A DeepEmbedDye instance.
+        dye: A Dye instance.
         layers: Layer modules to dye; by default auto-discovered.
 
     Returns:
-        A DeepEmbedController. Use set_labels(mask) to supply per-batch labels
+        A DyeController. Use set_labels(mask) to supply per-batch labels
         and remove() to uninstall all hooks.
     """
     layer_modules = list(layers) if layers is not None else _discover_layers(model, dye.num_layers)
@@ -264,4 +264,4 @@ def install_deep_embed(
     for layer_idx, layer_module in enumerate(layer_modules):
         handle = layer_module.register_forward_hook(_make_layer_hook(dye, holder, layer_idx))
         hook_handles.append(handle)
-    return DeepEmbedController(dye, layer_modules, holder, hook_handles)
+    return DyeController(dye, layer_modules, holder, hook_handles)
